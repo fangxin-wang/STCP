@@ -6,7 +6,7 @@ import copy
 import numpy as np
 from lib.logger import get_logger
 from lib.metrics import All_Metrics
-from model.cp.adptivecp import aci,cp,torchacicqr,cp_cqr,aci_cqr,aci2,aci_correction2,aci_gnn
+from model.cp.adptivecp import cp,aci2,aci_correction2,aci_gnn,cp_mlp
 import torch.nn.functional as F
 class Trainer(object):
     def __init__(self, model, loss, optimizer, train_loader, val_loader, test_loader,
@@ -159,7 +159,8 @@ class Trainer(object):
         start_time = time.time()
         for epoch in range(1, self.args.epochs + 1):
             #epoch_time = time.time()
-            train_epoch_loss = self.train_epoch_cqr(epoch)
+            #train_epoch_loss = self.train_epoch_cqr(epoch)
+            train_epoch_loss = self.train_epoch(epoch)
             #print(time.time()-epoch_time)
             #exit()
             '''
@@ -246,9 +247,23 @@ class Trainer(object):
         #np.save('./{}_true.npy'.format(args.dataset), y_true.numpy())
         #np.save('./{}_pred.npy'.format(args.dataset), y_pred.numpy())
         print("start adaptive conformal prediction on the device {}".format(args.device))
-        picplist,mpiwlist=aci_gnn(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
-        #picplist,mpiwlist=aci2(y_pred,y_true,0.05,0.05,args.device)
-        #picplist,mpiwlist=cp(y_pred,y_true,0.05,args.device)
+
+        if args.CP_MLP_test:
+            print('CP_MLP_test')
+            picplist,mpiwlist=cp_mlp(y_pred,y_true,0.05,args.device,correctionmodel,args.tinit)
+        if args.ACI_MLP_test:
+            print('ACI_MLP_test')
+            picplist,mpiwlist=aci_correction2(y_pred,y_true,0.05,0.05,args.device,correctionmodel,args.tinit)
+        if args.ACI_GNN_test:
+            print('ACI_GNN_test')
+            picplist,mpiwlist=aci_gnn(y_pred,y_true,0.05,0.05,args.device,correctionmodel,args.tinit)
+
+        if args.ACI_test:
+            print('ACI_test')
+            picplist,mpiwlist=aci2(y_pred,y_true,0.05,0.05,args.device,args.tinit)
+        if args.CP_test:
+            print('CP_test')
+            picplist,mpiwlist=cp(y_pred,y_true,0.05,args.device,args.tinit)
 
         #picplist,mpiwlist=aci_correction2(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
         #picp,mpiw=torchaci(y_pred,y_true,0.04,0.05,args.device)
@@ -262,68 +277,68 @@ class Trainer(object):
         mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
         logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},MPIW:{:.6f}".format(
                     mae, rmse, mape*100,picp,mpiw))
-    @staticmethod
-    def test_cqr(model, correctionmodel_u,correctionmodel_l,correctionmodel_m,args, data_loader, scaler, path=None):
-        #print(args.device)
-        model.to(args.device)
-        model.eval()
-        y_pred = []
-        y_up=[]
-        y_low=[]
-        y_true = []
-        with torch.no_grad():
-            for batch_idx, (data, target) in enumerate(data_loader):
-                data = data[..., :args.input_dim]
-                label = target[..., :args.output_dim]
-                output = model(data, target, teacher_forcing_ratio=0)
-                lower=output[:,:,:,1].unsqueeze(-1)
-                upper=output[:,:,:,2].unsqueeze(-1)
-                mid=output[:,:,:,0].unsqueeze(-1)
-                
-                y_true.append(label)
-                y_pred.append(mid)
-                y_up.append(upper)
-                y_low.append(lower)
-        y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
-
-        if args.real_value:
-            y_pred = torch.cat(y_pred, dim=0)
-            y_up = torch.cat(y_up, dim=0)
-            y_low = torch.cat(y_low, dim=0)
-        else:
-            y_pred = scaler.inverse_transform(torch.cat(y_pred, dim=0))
-            y_up = scaler.inverse_transform(torch.cat(y_up, dim=0))
-            y_low = scaler.inverse_transform(torch.cat(y_low, dim=0))
-        #ytrue=y_true.to_device(args.device)
-        #ypred=y_pred.to_device(args.device)
-        #np.save('./{}_true.npy'.format(args.dataset), y_true.numpy())
-        #np.save('./{}_pred.npy'.format(args.dataset), y_pred.numpy())
-        print("start adaptive conformal prediction on the device")
-        
-        #picp,mpiw=torchaci(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
-        picp,mpiw=aci_cqr(y_pred,y_true,y_low,y_up,0.05,0.05,args.device)
-
-        #picp,mpiw=torchacicqr(y_true,y_pred,y_low,y_up,0.05,0.05,args.device,correctionmodel_u,correctionmodel_l,correctionmodel_m)
-        for t in range(y_true.shape[1]):
-            mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
-                                                args.mae_thresh, args.mape_thresh)
-            print("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%".format(
-                t + 1, mae, rmse, mape*100))
-        mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
-        print("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},MPIW:{:.6f}".format(
-                    mae, rmse, mape*100,picp,mpiw))
-        with open("results.txt", "w") as file:  # 打开一个文件用于写入，如果文件不存在则创建它
-            for t in range(y_true.shape[1]):
-                mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
-                                                args.mae_thresh, args.mape_thresh)
-            
-                file.write("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%\n".format(t + 1, mae, rmse, mape * 100))
-
-        
-            mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
-        
-    
-            file.write("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%, PICP: {:.6f}, MPIW: {:.6f}\n".format(mae, rmse, mape * 100, picp, mpiw))
+    # @staticmethod
+    # def test_cqr(model, correctionmodel_u,correctionmodel_l,correctionmodel_m,args, data_loader, scaler, path=None):
+    #     #print(args.device)
+    #     model.to(args.device)
+    #     model.eval()
+    #     y_pred = []
+    #     y_up=[]
+    #     y_low=[]
+    #     y_true = []
+    #     with torch.no_grad():
+    #         for batch_idx, (data, target) in enumerate(data_loader):
+    #             data = data[..., :args.input_dim]
+    #             label = target[..., :args.output_dim]
+    #             output = model(data, target, teacher_forcing_ratio=0)
+    #             lower=output[:,:,:,1].unsqueeze(-1)
+    #             upper=output[:,:,:,2].unsqueeze(-1)
+    #             mid=output[:,:,:,0].unsqueeze(-1)
+    #
+    #             y_true.append(label)
+    #             y_pred.append(mid)
+    #             y_up.append(upper)
+    #             y_low.append(lower)
+    #     y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
+    #
+    #     if args.real_value:
+    #         y_pred = torch.cat(y_pred, dim=0)
+    #         y_up = torch.cat(y_up, dim=0)
+    #         y_low = torch.cat(y_low, dim=0)
+    #     else:
+    #         y_pred = scaler.inverse_transform(torch.cat(y_pred, dim=0))
+    #         y_up = scaler.inverse_transform(torch.cat(y_up, dim=0))
+    #         y_low = scaler.inverse_transform(torch.cat(y_low, dim=0))
+    #     #ytrue=y_true.to_device(args.device)
+    #     #ypred=y_pred.to_device(args.device)
+    #     #np.save('./{}_true.npy'.format(args.dataset), y_true.numpy())
+    #     #np.save('./{}_pred.npy'.format(args.dataset), y_pred.numpy())
+    #     print("start adaptive conformal prediction on the device")
+    #
+    #     #picp,mpiw=torchaci(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
+    #     picp,mpiw=aci_cqr(y_pred,y_true,y_low,y_up,0.05,0.05,args.device)
+    #
+    #     #picp,mpiw=torchacicqr(y_true,y_pred,y_low,y_up,0.05,0.05,args.device,correctionmodel_u,correctionmodel_l,correctionmodel_m)
+    #     for t in range(y_true.shape[1]):
+    #         mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
+    #                                             args.mae_thresh, args.mape_thresh)
+    #         print("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%".format(
+    #             t + 1, mae, rmse, mape*100))
+    #     mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
+    #     print("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},MPIW:{:.6f}".format(
+    #                 mae, rmse, mape*100,picp,mpiw))
+    #     with open("results.txt", "w") as file:  # 打开一个文件用于写入，如果文件不存在则创建它
+    #         for t in range(y_true.shape[1]):
+    #             mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
+    #                                             args.mae_thresh, args.mape_thresh)
+    #
+    #             file.write("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%\n".format(t + 1, mae, rmse, mape * 100))
+    #
+    #
+    #         mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
+    #
+    #
+    #         file.write("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%, PICP: {:.6f}, MPIW: {:.6f}\n".format(mae, rmse, mape * 100, picp, mpiw))
 
     @staticmethod
     def _compute_sampling_threshold(global_step, k):

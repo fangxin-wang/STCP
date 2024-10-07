@@ -63,13 +63,15 @@ def fit_calibration(temp_model, eval, data, train_mask, test_mask, patience = 10
     temp_model.load_state_dict(model_dict)
 
 
-def train_cal_correction(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=320):
+def train_cal_correction(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=300):
             model_to_correct = copy.deepcopy(model)
             if conf_correct_model == 'gnn':
                 confmodel =Network(args)
                 print("use GNN for correction")
             elif conf_correct_model == 'mlp':
                 confmodel = ConfMLP(32*args.num_nodes,args.num_nodes).to(args.device)
+            # print( './model/saved_model/correction_mlp_{}_{}'.format(tinit,args.save_filename))
+            # return
             
             optimizer = torch.optim.Adam(confmodel.parameters(), weight_decay=5e-4, lr=0.0001)  
             pred_loss_hist, size_loss_hist, cons_loss_hist, val_size_loss_hist = [], [], [], []
@@ -103,10 +105,8 @@ def train_cal_correction(model,args,data_loader,scaler,conf_correct_model='mlp',
                     #scores = torch.abs(YCal - predCal)#shape tinit*horizon*num_nodes*1
 
                     sample_indices = np.random.choice(np.arange(T), size=100, replace=False)
-
                     Ytest, Yhattest = y_true[sample_indices], y_pred[sample_indices] 
 
-                    #print("the shape of pred is {}".format(pred.shape))
                     confmodel.train()
                     
                     optimizer.zero_grad()
@@ -134,7 +134,7 @@ def train_cal_correction(model,args,data_loader,scaler,conf_correct_model='mlp',
 
                 print('**********Correction Epoch {}: Loss (average of qhat): {:.6f}'.format(epoch, loss))
             
-            torch.save(confmodel.state_dict(), './model/saved_model/correction_t400_cross_{}'.format(args.save_filename))
+            torch.save(confmodel.state_dict(), './model/saved_model/correction_mlp_{}_{}'.format(tinit,args.save_filename))
             print("correction model saved!")
 
             return rloss
@@ -238,11 +238,11 @@ def train_cal_correction_gnn(model,args,cal_loader,train_loader,scaler,tinit=300
                    print('**********Correction Epoch {}: Loss (size loss+prediction loss): {:.6f}'.format(epoch, loss))
 
             
-            torch.save(confmodel.state_dict(), './model/saved_model/correction_gnn_{}'.format(args.save_filename))
+            torch.save(confmodel.state_dict(), './model/saved_model/correction_gnn_{}_{}'.format(tinit,args.save_filename))
             print("correction model saved!")
 
             return rloss
-def train_cal_correction_CQR(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=500):
+def train_cal_correction_CQR(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=300):
             model_to_correct = copy.deepcopy(model)
             if conf_correct_model == 'gnn':
                 #confmodel = ConfGNN(32*args.num_nodes, output_dim=args.horizon*args.num_nodes).to(args.device)
@@ -361,95 +361,95 @@ def train_cal_correction_CQR(model,args,data_loader,scaler,conf_correct_model='m
             print("correction model saved!")
 
             return rloss
-
-def train_cal_correction_S2(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=500):
-            model_to_correct = copy.deepcopy(model)
-            if conf_correct_model == 'gnn':
-                print("use GNN for correction")
-                #confmodel = ConfGNN(32*args.num_nodes, output_dim=args.horizon*args.num_nodes).to(args.device)
-            
-            elif conf_correct_model == 'mlp':
-                confmodel1 = ConfMLP(32*args.num_nodes,args.horizon*args.num_nodes*2).to(args.device)
-                confmodel = ConfMLP(32*args.num_nodes,args.horizon*args.num_nodes*2).to(args.device)
-            params = list(confmodel.parameters()) + list(confmodel1.parameters())
-            optimizer = torch.optim.Adam(params, weight_decay=5e-4, lr=0.001)
-            optimizer1 = torch.optim.Adam(confmodel.parameters(), weight_decay=5e-4, lr=0.001)  
-            optimizer2 = torch.optim.Adam(confmodel1.parameters(), weight_decay=5e-4, lr=0.001)    
-            pred_loss_hist, size_loss_hist, cons_loss_hist, val_size_loss_hist = [], [], [], []
-            best_size_loss = 10000
-            best_val_acc = 0
-            y_true=[]
-            y_pred=[]
-            x=[]
-            rloss=[]
-            alpha=args.alpha
-            with torch.no_grad():
-                for batch_idx, (data, target) in enumerate(data_loader):
-                     data = data[..., :args.input_dim]
-                     #print("data size is {}".format(data.size()))
-                     label = target[..., :args.output_dim]
-                     output =model_to_correct(data, target, teacher_forcing_ratio=0)
-                     x.append(data)
-                     y_true.append(label)
-                     y_pred.append(output)
-                x=scaler.inverse_transform(torch.cat(x, dim=0))
-                #print(x.shape) #time_points*num_nodes*12*1
-                y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
-                if args.real_value:
-                   y_pred = torch.cat(y_pred, dim=0)
-                else:
-                   y_pred = scaler.inverse_transform(torch.cat(y_pred, dim=0))
-            print('Starting topology-aware conformal correction...')
-            mode_collapse=False
-            for epoch in range(1, args.correct_epochs + 1):  
-                T = len(y_true)
-                for t in range(tinit, T):
-                    YCal, predCal,x1 = y_true[t-tinit:t], y_pred[t-tinit:t],x[t-tinit:t]#the num of calibration timepoints: tinit
-                    #scores = torch.abs(YCal - predCal)#shape tinit*horizon*num_nodes*1
-                    pred=predCal.view(tinit,-1)
-                    #print(x1.shape)
-                    x2=x1.view(tinit,-1)
-                    inputx=torch.cat((x2,pred),dim=1)#concatenate, on second dimension
-                    confmodel.train()
-                    confmodel1.train()
-                    optimizer.zero_grad()
-                    adjust_pred = confmodel1(inputx)[:,:args.horizon*args.num_nodes]
-                    adjust_u=confmodel(inputx)[:,args.horizon*args.num_nodes:]
-
-                    adjust_pred=adjust_pred.view(tinit,predCal.shape[1],predCal.shape[2],1)
-                    adjust_u=adjust_u.view(tinit,predCal.shape[1],predCal.shape[2],1)
-
-                    scores = torch.abs((YCal - adjust_pred)/adjust_u)
-                    qhat = torch.quantile(scores, np.ceil((tinit+1)*(1-alpha))/tinit, interpolation='higher',dim=0)
-                            
-                    size_loss = torch.mean(torch.abs(qhat*adjust_u))
-                    pred_loss=torch.mean(torch.abs(adjust_pred- YCal))
-                    if epoch<10:
-                        loss=pred_loss
-                    elif epoch>=10:
-                        loss = pred_loss+args.size_loss_weight* size_loss
-                    if torch.isnan(loss):
-                        print("the loss is nan, model collapse!")
-                        print('The size_loss: {:.6f}, the max of qhat: {:.6f},the min of qhat:{},the max of adjust_u: {:.6f},the min of adjust_u:{}'.format(size_loss, torch.max(qhat), torch.min(qhat),torch.min(adjust_u),torch.min(adjust_u)))
-                        mode_collapse=True
-                        break
-                    rloss.append(loss)
-                    loss.backward()
-
-                    optimizer.step()
-                    max_weight = max(param.abs().max().item() for param in confmodel.parameters())
-                    max_weight1 = max(param.abs().max().item() for param in confmodel1.parameters())
-
-
-                print('Correction Epoch {}: Loss (average of qhat): {:.6f}, max of adjust scores:{:.6f},max of adjusted u:{:.6f}'.format(epoch, loss,max_weight1,max_weight))
-                if mode_collapse== True:
-                    break
-                
-            torch.save(confmodel.state_dict(), './model/saved_model/correction_{}_s2'.format(args.save_filename))
-            torch.save(confmodel1.state_dict(), './model/saved_model/correction_{}_s21'.format(args.save_filename))
-            print("correction model saved!")
-            
-            return rloss
+#
+# def train_cal_correction_S2(model,args,data_loader,scaler,conf_correct_model='mlp',tinit=500):
+#             model_to_correct = copy.deepcopy(model)
+#             if conf_correct_model == 'gnn':
+#                 print("use GNN for correction")
+#                 #confmodel = ConfGNN(32*args.num_nodes, output_dim=args.horizon*args.num_nodes).to(args.device)
+#
+#             elif conf_correct_model == 'mlp':
+#                 confmodel1 = ConfMLP(32*args.num_nodes,args.horizon*args.num_nodes*2).to(args.device)
+#                 confmodel = ConfMLP(32*args.num_nodes,args.horizon*args.num_nodes*2).to(args.device)
+#             params = list(confmodel.parameters()) + list(confmodel1.parameters())
+#             optimizer = torch.optim.Adam(params, weight_decay=5e-4, lr=0.001)
+#             optimizer1 = torch.optim.Adam(confmodel.parameters(), weight_decay=5e-4, lr=0.001)
+#             optimizer2 = torch.optim.Adam(confmodel1.parameters(), weight_decay=5e-4, lr=0.001)
+#             pred_loss_hist, size_loss_hist, cons_loss_hist, val_size_loss_hist = [], [], [], []
+#             best_size_loss = 10000
+#             best_val_acc = 0
+#             y_true=[]
+#             y_pred=[]
+#             x=[]
+#             rloss=[]
+#             alpha=args.alpha
+#             with torch.no_grad():
+#                 for batch_idx, (data, target) in enumerate(data_loader):
+#                      data = data[..., :args.input_dim]
+#                      #print("data size is {}".format(data.size()))
+#                      label = target[..., :args.output_dim]
+#                      output =model_to_correct(data, target, teacher_forcing_ratio=0)
+#                      x.append(data)
+#                      y_true.append(label)
+#                      y_pred.append(output)
+#                 x=scaler.inverse_transform(torch.cat(x, dim=0))
+#                 #print(x.shape) #time_points*num_nodes*12*1
+#                 y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
+#                 if args.real_value:
+#                    y_pred = torch.cat(y_pred, dim=0)
+#                 else:
+#                    y_pred = scaler.inverse_transform(torch.cat(y_pred, dim=0))
+#             print('Starting topology-aware conformal correction...')
+#             mode_collapse=False
+#             for epoch in range(1, args.correct_epochs + 1):
+#                 T = len(y_true)
+#                 for t in range(tinit, T):
+#                     YCal, predCal,x1 = y_true[t-tinit:t], y_pred[t-tinit:t],x[t-tinit:t]#the num of calibration timepoints: tinit
+#                     #scores = torch.abs(YCal - predCal)#shape tinit*horizon*num_nodes*1
+#                     pred=predCal.view(tinit,-1)
+#                     #print(x1.shape)
+#                     x2=x1.view(tinit,-1)
+#                     inputx=torch.cat((x2,pred),dim=1)#concatenate, on second dimension
+#                     confmodel.train()
+#                     confmodel1.train()
+#                     optimizer.zero_grad()
+#                     adjust_pred = confmodel1(inputx)[:,:args.horizon*args.num_nodes]
+#                     adjust_u=confmodel(inputx)[:,args.horizon*args.num_nodes:]
+#
+#                     adjust_pred=adjust_pred.view(tinit,predCal.shape[1],predCal.shape[2],1)
+#                     adjust_u=adjust_u.view(tinit,predCal.shape[1],predCal.shape[2],1)
+#
+#                     scores = torch.abs((YCal - adjust_pred)/adjust_u)
+#                     qhat = torch.quantile(scores, np.ceil((tinit+1)*(1-alpha))/tinit, interpolation='higher',dim=0)
+#
+#                     size_loss = torch.mean(torch.abs(qhat*adjust_u))
+#                     pred_loss=torch.mean(torch.abs(adjust_pred- YCal))
+#                     if epoch<10:
+#                         loss=pred_loss
+#                     elif epoch>=10:
+#                         loss = pred_loss+args.size_loss_weight* size_loss
+#                     if torch.isnan(loss):
+#                         print("the loss is nan, model collapse!")
+#                         print('The size_loss: {:.6f}, the max of qhat: {:.6f},the min of qhat:{},the max of adjust_u: {:.6f},the min of adjust_u:{}'.format(size_loss, torch.max(qhat), torch.min(qhat),torch.min(adjust_u),torch.min(adjust_u)))
+#                         mode_collapse=True
+#                         break
+#                     rloss.append(loss)
+#                     loss.backward()
+#
+#                     optimizer.step()
+#                     max_weight = max(param.abs().max().item() for param in confmodel.parameters())
+#                     max_weight1 = max(param.abs().max().item() for param in confmodel1.parameters())
+#
+#
+#                 print('Correction Epoch {}: Loss (average of qhat): {:.6f}, max of adjust scores:{:.6f},max of adjusted u:{:.6f}'.format(epoch, loss,max_weight1,max_weight))
+#                 if mode_collapse== True:
+#                     break
+#
+#             torch.save(confmodel.state_dict(), './model/saved_model/correction_{}_s2'.format(args.save_filename))
+#             torch.save(confmodel1.state_dict(), './model/saved_model/correction_{}_s21'.format(args.save_filename))
+#             print("correction model saved!")
+#
+#             return rloss
 '''
             
 model = Network(args)
