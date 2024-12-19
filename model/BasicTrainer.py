@@ -6,13 +6,17 @@ import copy
 import numpy as np
 from lib.logger import get_logger
 from lib.metrics import All_Metrics
-from model.cp.adptivecp import cp,aci2,aci_correction2,aci_gnn,cp_mlp
+
 import torch.nn.functional as F
+from  model.adaptive_multi import aci_graph, aci_map_graph
+import re
+
 class Trainer(object):
     def __init__(self, model, loss, optimizer, train_loader, val_loader, test_loader,
-                 scaler, args, lr_scheduler=None):
+                 scaler, args, lr_scheduler=None, gt_model = False):
         super(Trainer, self).__init__()
         self.model = model
+        self.gt_model = gt_model
         self.loss = loss
         self.optimizer = optimizer
         self.train_loader = train_loader
@@ -71,8 +75,11 @@ class Trainer(object):
             else:
                 teacher_forcing_ratio = 1.
             #data and target shape: B, T, N, F; output shape: B, T, N, F
-            output = self.model(data, target, teacher_forcing_ratio=teacher_forcing_ratio)
+            print('input',data.shape)
+            output,latent= self.model(data, target, teacher_forcing_ratio=teacher_forcing_ratio)
+            print('output', output.shape)
             #print("size of output is {}".format(output.size()))
+            #print("size of latent is {}".format(latent.size()))
             if self.args.real_value:
                 label = self.scaler.inverse_transform(label)
             loss = self.loss(output, label)
@@ -114,6 +121,7 @@ class Trainer(object):
             else:
                 teacher_forcing_ratio = 1.
             #data and target shape: B, T, N, F; output shape: B, T, N, F
+
             output = self.model(data, target, teacher_forcing_ratio=teacher_forcing_ratio)
             if self.args.real_value:
                 label = self.scaler.inverse_transform(label)
@@ -218,7 +226,21 @@ class Trainer(object):
         self.logger.info("Saving current best model to " + self.best_path)
 
     @staticmethod
-    def test(model, correctionmodel,args, data_loader, scaler, logger, path=None):
+    def gt_test(gt_model, correctionmodel, args, data_loader, scaler, logger, path=None):
+        y_pred = []
+        y_true = []
+        x = []
+        for batch_idx, (data, target) in enumerate(data_loader):
+            data = data[..., :args.input_dim]
+            label = target[..., :args.output_dim]
+            output = gt_model.predict(data, target, teacher_forcing_ratio=0)
+            y_true.append(label)
+            y_pred.append(output)
+            x.append(data)
+
+    @staticmethod
+    def test(model, correctionmodel, args, data_loader, scaler, logger, path=None):
+
         if path != None:
             check_point = torch.load(path)
             state_dict = check_point['state_dict']
@@ -227,17 +249,44 @@ class Trainer(object):
         #print(args.device)
         model.to(args.device)
         model.eval()
+
         y_pred = []
         y_true = []
+        x=[]
+        latent_t = []
         with torch.no_grad():
             for batch_idx, (data, target) in enumerate(data_loader):
                 data = data[..., :args.input_dim]
                 label = target[..., :args.output_dim]
-                output = model(data, target, teacher_forcing_ratio=0)
+                output, latent = model(data, target, teacher_forcing_ratio=0)
+                latent_t.append(latent)
                 y_true.append(label)
                 y_pred.append(output)
-        y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
+                x.append(data)
 
+        latent_t = scaler.inverse_transform(torch.cat(latent_t, dim=0))
+        latent_t = latent_t.squeeze(1)
+
+        link_logits = torch.matmul(latent_t, latent_t.transpose(2, 1))
+
+        # Normalize each time step separately to the range [0, 1]
+        min_vals = link_logits.min(dim= 1, keepdim=True)[0]  # Shape [time_step, 1, 1]
+        max_vals = link_logits.max(dim= 1, keepdim=True)[0]  # Shape [time_step, 1, 1]
+
+        # Avoid division by zero in case max_vals equals min_vals
+        norma_link_logits = (link_logits - min_vals) / (max_vals - min_vals + 1e-8)
+
+        # Link prediction
+        array_str = args.cor_m
+        cor_m_shape = (args.num_nodes, args.num_nodes)
+        cor_m = convert_str_2_tensor(array_str, cor_m_shape, args.device)
+        cor_m_expanded = cor_m.unsqueeze(0).expand(link_logits.shape[0], -1, -1)
+
+        gap_m = norma_link_logits - cor_m_expanded
+
+
+        y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
+        x=scaler.inverse_transform(torch.cat(x,dim=0))
         if args.real_value:
             y_pred = torch.cat(y_pred, dim=0)
         else:
@@ -247,98 +296,23 @@ class Trainer(object):
         #np.save('./{}_true.npy'.format(args.dataset), y_true.numpy())
         #np.save('./{}_pred.npy'.format(args.dataset), y_pred.numpy())
         print("start adaptive conformal prediction on the device {}".format(args.device))
+        #if args.dCP_test:
+        #    picp,mpiwlist=dcp(x,y_pred,y_true,0.05,args.device,args.tinit)
 
-        if args.CP_MLP_test:
-            print('CP_MLP_test')
-            picplist,mpiwlist=cp_mlp(y_pred,y_true,0.05,args.device,correctionmodel,args.tinit)
+        print("Predict Link? ", args.link_pred )
         if args.ACI_MLP_test:
-            print('ACI_MLP_test')
-            picplist,mpiwlist=aci_correction2(y_pred,y_true,0.05,0.05,args.device,correctionmodel,args.tinit)
-        if args.ACI_GNN_test:
-            print('ACI_GNN_test')
-            picplist,mpiwlist=aci_gnn(y_pred,y_true,0.05,0.05,args.device,correctionmodel,args.tinit)
-
+            print('ACI_multi_MLP_test: Map to another space')
+            # picp,eff=aci_map(y_pred,y_true,0.05,args.gamma,args.device,correctionmodel,args.tinit)
+            picp, eff = aci_map_graph(y_pred, y_true, 0.05, args.gamma, args.device, correctionmodel, gap_m , args.tinit, args.link_pred)
         if args.ACI_test:
-            print('ACI_test')
-            picplist,mpiwlist=aci2(y_pred,y_true,0.05,0.05,args.device,args.tinit)
-        if args.CP_test:
-            print('CP_test')
-            picplist,mpiwlist=cp(y_pred,y_true,0.05,args.device,args.tinit)
-
-        #picplist,mpiwlist=aci_correction2(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
-        #picp,mpiw=torchaci(y_pred,y_true,0.04,0.05,args.device)
-        picp=sum(picplist)/len(picplist)
-        mpiw=sum(mpiwlist)/len(mpiwlist)
-        for t in range(y_true.shape[1]):
-            mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
-                                                args.mae_thresh, args.mape_thresh)
-            logger.info("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%".format(
-                t + 1, mae, rmse, mape*100))
+            print('ACI_multi_test')
+            # ypred, ytrue, alpha, gamma,device,gap_m, tinit=300, link_pred
+            picp,eff=aci_graph(y_pred,y_true,0.05,args.gamma,args.device,gap_m, args.tinit, args.link_pred)
+        print(picp)
         mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
-        logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},MPIW:{:.6f}".format(
-                    mae, rmse, mape*100,picp,mpiw))
-    # @staticmethod
-    # def test_cqr(model, correctionmodel_u,correctionmodel_l,correctionmodel_m,args, data_loader, scaler, path=None):
-    #     #print(args.device)
-    #     model.to(args.device)
-    #     model.eval()
-    #     y_pred = []
-    #     y_up=[]
-    #     y_low=[]
-    #     y_true = []
-    #     with torch.no_grad():
-    #         for batch_idx, (data, target) in enumerate(data_loader):
-    #             data = data[..., :args.input_dim]
-    #             label = target[..., :args.output_dim]
-    #             output = model(data, target, teacher_forcing_ratio=0)
-    #             lower=output[:,:,:,1].unsqueeze(-1)
-    #             upper=output[:,:,:,2].unsqueeze(-1)
-    #             mid=output[:,:,:,0].unsqueeze(-1)
-    #
-    #             y_true.append(label)
-    #             y_pred.append(mid)
-    #             y_up.append(upper)
-    #             y_low.append(lower)
-    #     y_true = scaler.inverse_transform(torch.cat(y_true, dim=0))
-    #
-    #     if args.real_value:
-    #         y_pred = torch.cat(y_pred, dim=0)
-    #         y_up = torch.cat(y_up, dim=0)
-    #         y_low = torch.cat(y_low, dim=0)
-    #     else:
-    #         y_pred = scaler.inverse_transform(torch.cat(y_pred, dim=0))
-    #         y_up = scaler.inverse_transform(torch.cat(y_up, dim=0))
-    #         y_low = scaler.inverse_transform(torch.cat(y_low, dim=0))
-    #     #ytrue=y_true.to_device(args.device)
-    #     #ypred=y_pred.to_device(args.device)
-    #     #np.save('./{}_true.npy'.format(args.dataset), y_true.numpy())
-    #     #np.save('./{}_pred.npy'.format(args.dataset), y_pred.numpy())
-    #     print("start adaptive conformal prediction on the device")
-    #
-    #     #picp,mpiw=torchaci(y_pred,y_true,0.05,0.05,args.device,correctionmodel)
-    #     picp,mpiw=aci_cqr(y_pred,y_true,y_low,y_up,0.05,0.05,args.device)
-    #
-    #     #picp,mpiw=torchacicqr(y_true,y_pred,y_low,y_up,0.05,0.05,args.device,correctionmodel_u,correctionmodel_l,correctionmodel_m)
-    #     for t in range(y_true.shape[1]):
-    #         mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
-    #                                             args.mae_thresh, args.mape_thresh)
-    #         print("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%".format(
-    #             t + 1, mae, rmse, mape*100))
-    #     mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
-    #     print("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},MPIW:{:.6f}".format(
-    #                 mae, rmse, mape*100,picp,mpiw))
-    #     with open("results.txt", "w") as file:  # 打开一个文件用于写入，如果文件不存在则创建它
-    #         for t in range(y_true.shape[1]):
-    #             mae, rmse, mape, _, _ = All_Metrics(y_pred[:, t, ...], y_true[:, t, ...],
-    #                                             args.mae_thresh, args.mape_thresh)
-    #
-    #             file.write("Horizon {:02d}, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%\n".format(t + 1, mae, rmse, mape * 100))
-    #
-    #
-    #         mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
-    #
-    #
-    #         file.write("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%, PICP: {:.6f}, MPIW: {:.6f}\n".format(mae, rmse, mape * 100, picp, mpiw))
+        logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},Ineff:{:.6f}".format(
+                    mae, rmse, mape*100,picp*100,eff))
+
 
     @staticmethod
     def _compute_sampling_threshold(global_step, k):
@@ -349,3 +323,15 @@ class Trainer(object):
         :return:
         """
         return k / (k + math.exp(global_step / k))
+
+def convert_str_2_tensor(array_str, new_shape, device):
+    cleaned_string = re.sub(r'[\[\]]', '', array_str)
+    array_1d = np.fromstring(cleaned_string, sep=' ')
+    m = torch.tensor(array_1d.reshape( new_shape), device = device)
+    return m
+
+def normalize_tensor_to_0_1(tensor):
+    min_val = tensor.min()
+    max_val = tensor.max()
+    normalized_tensor = (tensor - min_val) / (max_val - min_val)
+    return normalized_tensor

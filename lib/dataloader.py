@@ -83,7 +83,7 @@ def data_loader(X, Y, batch_size, shuffle=True, drop_last=True):
 
 def get_dataloader(args, normalizer = 'std', tod=False, dow=False, weather=False, single=True):
     #load raw st dataset
-    data = load_st_dataset(args.dataset)        # B, N, D
+    data = load_st_dataset(args.dataset, args.syn_seed)        # B, N, D
     #normalize st data
     data, scaler = normalize_dataset(data, normalizer, args.column_wise)
     #spilit dataset by days or by ratio
