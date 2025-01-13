@@ -12,6 +12,7 @@ import argparse
 import configparser
 from datetime import datetime
 from model.AGCRN import AGCRN as Network, InferenceWithDropout, GT_Predictor
+from model.PCP import PCP
 from model.correction import RKHSMapping
 from model.BasicTrainer import Trainer, convert_str_2_tensor
 from lib.TrainInits import init_seed
@@ -31,7 +32,10 @@ initial_parser.add_argument('--debug', default=True, type=bool)
 initial_parser.add_argument('--model', default='AGCRN', type=str)
 initial_parser.add_argument('--cuda', default=True, type=bool)
 initial_parser.add_argument('--tinit',default=300,type=int)
+initial_parser.add_argument('--K',default=1,type=int)
 initial_parser.add_argument("--ACI_MLP_test", action="store_true", default=False, help="Test with CP")
+initial_parser.add_argument("--PCP_test", action="store_true", default=False, help="Test with PCP")
+initial_parser.add_argument("--PCP_ellip_test", action="store_true", default=False, help="Test with PCP_ellip")
 initial_parser.add_argument("--ACI_test", action="store_true", default=False, help="Test with ACI")
 initial_parser.add_argument('--gamma',default=0.05,type=float, help = 'Gamma for ACI Step')
 initial_parser.add_argument("--link_pred", action="store_true", default=False, help="Add link prediction loss to score")
@@ -44,10 +48,10 @@ initial_args, remaining_argv = initial_parser.parse_known_args()
 
 #get configuration
 print(initial_args.dataset)
-if initial_args.dataset=='syn':
-
+if initial_args.dataset=='syn_gpvar':
     config_file = './model/syn_gpvar_{}.conf'.format( initial_args.syn_seed )
-
+elif initial_args.dataset=='syn_tailup':
+    config_file = './model/syn_tailup_{}.conf'.format( initial_args.syn_seed )
 else:
     config_file = './model/{}_{}.conf'.format(initial_args.dataset, initial_args.model)
 print('Read configuration file: %s' % (config_file))
@@ -100,21 +104,34 @@ second_parser.add_argument('--mape_thresh', default=config['test']['mape_thresh'
 second_parser.add_argument('--log_dir', default='./log/', type=str)
 second_parser.add_argument('--log_step', default=config['log']['log_step'], type=int)
 second_parser.add_argument('--plot', default=config['log']['plot'], type=eval)
-second_parser.add_argument('--adj_m', default = config['var_para']['adj_m'], type=str)
-second_parser.add_argument('--cor_m', default = config['var_para']['cor_m'], type=str)
-second_parser.add_argument('--cor_hop', default = config['var_para']['cor_hop'], type=int)
-second_parser.add_argument('--cor_t', default = config['var_para']['cor_t'], type=int)
-second_parser.add_argument('--Theta', default = config['var_para']['Theta'], type=str)
-second_parser.add_argument('--noise_mu', default = config['var_para']['noise_mu'], type=str)
-second_parser.add_argument('--noise_sigma', default = config['var_para']['noise_sigma'], type=str)
+
+if initial_args.dataset=='syn_gpvar':
+    second_parser.add_argument('--adj_m', default = config['var_para']['adj_m'], type=str)
+    second_parser.add_argument('--cor_m', default = config['var_para']['cor_m'], type=str)
+    second_parser.add_argument('--cor_hop', default = config['var_para']['cor_hop'], type=int)
+    second_parser.add_argument('--cor_t', default = config['var_para']['cor_t'], type=int)
+    second_parser.add_argument('--Theta', default = config['var_para']['Theta'], type=str)
+    second_parser.add_argument('--noise_mu', default = config['var_para']['noise_mu'], type=str)
+    second_parser.add_argument('--noise_sigma', default = config['var_para']['noise_sigma'], type=str)
+elif initial_args.dataset=='syn_tailup':
+    second_parser.add_argument('--w', default=config['var_para']['w'], type=int)
+    second_parser.add_argument('--lmbd', default = 0, type=float, help= "The weight of graph covariance matrix.")
+    second_parser.add_argument('--D', default=config['var_para']['D'], type=str)
+    second_parser.add_argument('--alpha_true', default=config['var_para']['alpha_true'], type=str)
+    second_parser.add_argument('--sigma2_true', default=config['var_para']['sigma2_true'], type=str)
+    second_parser.add_argument('--phi_true', default=config['var_para']['phi_true'], type=str)
+    second_parser.add_argument('--Sigma_spatial', default=config['var_para']['Sigma_spatial'], type=str)
+    second_parser.add_argument('--Cov_type', default = 'ellip', type=str)
 
 #save model
 second_parser.add_argument('--save_path', default='./saved_model/', type=str)
-if initial_args.dataset!='syn':
-    second_parser.add_argument('--save_filename', default='{}_{}.pth'.format(initial_args.dataset, 'saved_model'), type=str)
+if initial_args.dataset=='syn_gpvar':
+    second_parser.add_argument('--save_filename', default='syn_gpvar_{}_{}.pth'.format(initial_args.syn_seed, 'saved_model'), type=str)
+elif initial_args.dataset=='syn_tailup':
+    second_parser.add_argument('--save_filename', default='syn_tailup_{}_{}.pth'.format(initial_args.syn_seed, 'saved_model'), type=str)
 else:
-    second_parser.add_argument('--save_filename', default='syn_{}_{}.pth'.format(initial_args.syn_seed, 'saved_model'),
-                               type=str)
+    second_parser.add_argument('--save_filename', default='{}_{}.pth'.format(initial_args.dataset, 'saved_model'), type=str)
+
 
 #correction
 second_parser.add_argument('--map_dim', default=3, type=int)
@@ -136,7 +153,7 @@ if torch.cuda.is_available():
 else:
     args.device = 'cpu'
 
-print(args.horizon)
+print("horizon",args.horizon,"num_nodes", args.num_nodes)
 
 #init model
 model = Network(args)
@@ -211,7 +228,6 @@ if args.mode == 'train':
     print(model_path)
     torch.save(model.state_dict(), model_path)
 
-
 elif args.mode == 'calcorrection':
 
     model.load_state_dict(torch.load( model_path ,map_location=args.device))
@@ -231,7 +247,8 @@ elif args.mode == 'calcorrection':
     # plt.plot(loss_cpu)
     # plt.savefig('./correction_loss_gnn_plot.png')
 
-elif args.mode == 'test':
+elif args.mode == 'test_map':
+
     print("Start test  with gamma: {}, use mapping: {}".format(args.gamma,args.ACI_MLP_test))
     correctmodel=RKHSMapping(args.num_nodes,args.map_dim)
     correctmodel_path = '{}map_dim{}_{}'.format(args.save_path,args.map_dim,args.save_filename)
@@ -245,15 +262,23 @@ elif args.mode == 'test':
     #model.load_state_dict(torch.load(model_path,map_location=args.device))
     print("Start testing: Load training model from {} and correction model{}".format( model_path,correctmodel_path) )
     
-    trainer.test(model, correctmodel,trainer.args, test_loader, scaler, trainer.logger)
+    trainer.test_map(model, correctmodel,trainer.args, test_loader, scaler, trainer.logger)
 
 elif args.mode == 'test_gt':
+
 
     model_gt = GT_Predictor(args)
     print(type(model), type(model_gt))
     trainer_gt = Trainer(model_gt, loss, optimizer, train_loader, cal_loader, test_loader, scaler,
                   args, lr_scheduler=lr_scheduler)
+    print("start test")
     trainer_gt.gt_test(model_gt, None, trainer_gt.args, test_loader, scaler, trainer_gt.logger)
+
+elif args.mode == 'test':
+
+    picp, eff = trainer.gt_test(model, None, trainer.args, test_loader, scaler, trainer.logger)
+
+    print(f"{args.dataset},{args.syn_seed},{args.lmbd},{args.gamma},{args.Cov_type},{picp},{eff}")
 
 '''
 elif args.mode == 'testgnn':

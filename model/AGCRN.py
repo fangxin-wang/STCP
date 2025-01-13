@@ -132,9 +132,10 @@ class GT_Predictor():
         self.Q = args.cor_t
         self.L = args.cor_hop
         self.Theta = convert_str_2_tensor(args.Theta, (self.L+1, self.Q), args.device)  # cor_hop * cor_t
-        self.noise_mu = convert_str_2_tensor(args.noise_mu,  self.N ,args.device)
-        self.noise_sigma = convert_str_2_tensor( args.noise_sigma, (self.N, self.N), args.device)
+        self.noise_mu = convert_str_2_tensor(args.noise_mu,  self.N ,args.device).cpu().numpy()
+        self.noise_sigma = convert_str_2_tensor( args.noise_sigma, (self.N, self.N), args.device).cpu().numpy()
         self.dist = multivariate_normal(mean=self.noise_mu, cov=self.noise_sigma)
+        self.device=args.device
 
     def predict(self, x, target, teacher_forcing_ratio = 0):
         """
@@ -142,19 +143,20 @@ class GT_Predictor():
             output:  (batch size, 1, number of node, 1)
         """
         B = x.shape[0]
-        Res = torch.zeros( B, 1, self.N)
+        Res = torch.zeros( B, 1, self.N).to(self.device)
         x = x.squeeze(-1)
-        print("x: ", x.shape, x[0])
+        #print("x: ", x.shape, x[0])
 
         for b in range(B):
-            sum_term = torch.zeros(self.N)
+            sum_term = torch.zeros(self.N).to(self.device)
             for l in range(self.L + 1):
                 for q in range( self.Q):
 
-                    shifted_x = torch.matrix_power(self.S, l).float() @ x[b, - q - 1, : ]
+                    shifted_x = (torch.matrix_power(self.S, l).float() @ x[b, - q - 1, : ]).to(self.device)
                     sum_term += self.Theta[l, q] * shifted_x
-
-            Res[ b, 0,:] = torch.tanh(sum_term) + 0.1 * self.dist.rvs(size=1)
+            noise = torch.tensor(self.dist.rvs(size=1), dtype=torch.float32, device=self.device)  # Generate noise
+            Res[b, 0, :] = torch.tanh(sum_term) + 0.1 * noise
+            
         # print('pred', Res[ 0, 0,:], 'target',target[0], '==')
 
         return Res.unsqueeze(-1)

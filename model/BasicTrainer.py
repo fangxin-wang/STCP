@@ -6,9 +6,12 @@ import copy
 import numpy as np
 from lib.logger import get_logger
 from lib.metrics import All_Metrics
+from sklearn.linear_model import LinearRegression
 
 import torch.nn.functional as F
 from  model.adaptive_multi import aci_graph, aci_map_graph
+# from data.gen_syn_graph_tailup import estimate_tailup_para
+from model.PCP import PCP_ellip
 import re
 
 class Trainer(object):
@@ -39,6 +42,11 @@ class Trainer(object):
         #self.logger.info("Argument: %r", args)
         # for arg, value in sorted(vars(args).items()):
         #     self.logger.info("Argument %s: %r", arg, value)
+
+    def estimate_spatial_correlation(self, w = 2):
+        return
+
+
 
     def val_epoch(self, epoch, val_dataloader):
         self.model.eval()
@@ -227,19 +235,43 @@ class Trainer(object):
 
     @staticmethod
     def gt_test(gt_model, correctionmodel, args, data_loader, scaler, logger, path=None):
+
         y_pred = []
         y_true = []
         x = []
+
         for batch_idx, (data, target) in enumerate(data_loader):
             data = data[..., :args.input_dim]
             label = target[..., :args.output_dim]
-            output = gt_model.predict(data, target, teacher_forcing_ratio=0)
+            output, latent = gt_model.forward(data, None, teacher_forcing_ratio=0)
             y_true.append(label)
             y_pred.append(output)
             x.append(data)
 
+        y_true_scaled = scaler.inverse_transform(torch.cat(y_true, dim=0))
+        x_scaled = scaler.inverse_transform(torch.cat(x, dim=0))
+        y_pred_scaled = scaler.inverse_transform(torch.cat(y_pred, dim=0) )
+
+        y_true = torch.cat(y_true, dim=0)
+        x = torch.cat(x, dim=0)
+        y_pred = torch.cat(y_pred, dim=0)
+
+        if args.PCP_test:
+            print('PCP_test')
+            picp, eff = PCP(gt_model,data_loader,0.05,args)
+        if args.PCP_ellip_test:
+            print('PCP_ellip_test')
+            # cov_spatial = self.estimate_spatial_correlation()
+            picp,eff = PCP_ellip(gt_model,data_loader,0.05, args)
+
+        print( type(y_pred), type(y_true))
+        mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
+        logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},Ineff:{:.6f}".format(
+                   mae, rmse, mape*100,picp*100,eff))
+        return picp*100,eff
+
     @staticmethod
-    def test(model, correctionmodel, args, data_loader, scaler, logger, path=None):
+    def test_map(model, correctionmodel, args, data_loader, scaler, logger, path=None):
 
         if path != None:
             check_point = torch.load(path)
@@ -300,6 +332,8 @@ class Trainer(object):
         #    picp,mpiwlist=dcp(x,y_pred,y_true,0.05,args.device,args.tinit)
 
         print("Predict Link? ", args.link_pred )
+
+
         if args.ACI_MLP_test:
             print('ACI_multi_MLP_test: Map to another space')
             # picp,eff=aci_map(y_pred,y_true,0.05,args.gamma,args.device,correctionmodel,args.tinit)
@@ -312,6 +346,8 @@ class Trainer(object):
         mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
         logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},Ineff:{:.6f}".format(
                     mae, rmse, mape*100,picp*100,eff))
+
+        # return picp*100,eff
 
 
     @staticmethod

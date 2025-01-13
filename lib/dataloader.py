@@ -85,7 +85,8 @@ def get_dataloader(args, normalizer = 'std', tod=False, dow=False, weather=False
     #load raw st dataset
     data = load_st_dataset(args.dataset, args.syn_seed)        # B, N, D
     #normalize st data
-    data, scaler = normalize_dataset(data, normalizer, args.column_wise)
+    _, scaler = normalize_dataset(data, normalizer, args.column_wise)
+
     #spilit dataset by days or by ratio
     if args.test_ratio > 1:
         data_train, data_val, data_test = split_data_by_days(data, args.val_ratio, args.test_ratio)
