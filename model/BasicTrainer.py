@@ -11,7 +11,7 @@ from sklearn.linear_model import LinearRegression
 import torch.nn.functional as F
 from  model.adaptive_multi import aci_graph, aci_map_graph
 # from data.gen_syn_graph_tailup import estimate_tailup_para
-from model.PCP import PCP_ellip
+from model.PCP import PCP_ellip, PCP_ellip_nonlinear
 import re
 
 class Trainer(object):
@@ -83,9 +83,9 @@ class Trainer(object):
             else:
                 teacher_forcing_ratio = 1.
             #data and target shape: B, T, N, F; output shape: B, T, N, F
-            print('input',data.shape)
+            # print('input',data.shape)
             output,latent= self.model(data, target, teacher_forcing_ratio=teacher_forcing_ratio)
-            print('output', output.shape)
+            # print('output', output.shape)
             #print("size of output is {}".format(output.size()))
             #print("size of latent is {}".format(latent.size()))
             if self.args.real_value:
@@ -219,7 +219,6 @@ class Trainer(object):
         self.logger.info("Total training time: {:.4f}min, best loss: {:.6f}".format((training_time / 60), best_loss))
 
 
-
         #self.model.load_state_dict(best_model)
         #self.val_epoch(self.args.epochs, self.test_loader)
         #self.test(self.model, self.args, self.test_loader, self.scaler, self.logger)
@@ -238,34 +237,44 @@ class Trainer(object):
 
         y_pred = []
         y_true = []
-        x = []
+        #x = []
 
-        for batch_idx, (data, target) in enumerate(data_loader):
-            data = data[..., :args.input_dim]
-            label = target[..., :args.output_dim]
-            output, latent = gt_model.forward(data, None, teacher_forcing_ratio=0)
-            y_true.append(label)
-            y_pred.append(output)
-            x.append(data)
+        gt_model.eval()
+        with torch.no_grad():
+            for batch_idx, (data, target) in enumerate(data_loader):
+                data = data[..., :args.input_dim]
+                label = target[..., :args.output_dim]
+                output, _ = gt_model.forward(data, None, teacher_forcing_ratio=0)
+                y_true.append(label)
+                y_pred.append(output)
+                #x.append(data)
 
-        y_true_scaled = scaler.inverse_transform(torch.cat(y_true, dim=0))
-        x_scaled = scaler.inverse_transform(torch.cat(x, dim=0))
-        y_pred_scaled = scaler.inverse_transform(torch.cat(y_pred, dim=0) )
+        # x = torch.cat(x, dim=0)
 
+        # print(type(y_pred),type(y_true))
         y_true = torch.cat(y_true, dim=0)
-        x = torch.cat(x, dim=0)
         y_pred = torch.cat(y_pred, dim=0)
+        mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
+        logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%".format(mae, rmse, mape * 100) )
 
-        if args.PCP_test:
-            print('PCP_test')
-            picp, eff = PCP(gt_model,data_loader,0.05,args)
+        # y_true_scaled = scaler.inverse_transform(torch.cat(y_true, dim=0))
+        # x_scaled = scaler.inverse_transform(torch.cat(x, dim=0))
+        # y_pred_scaled = scaler.inverse_transform(torch.cat(y_pred, dim=0) )
+
+
+        # if args.PCP_test:
+        #     print('PCP_test')
+        #     picp, eff = PCP(gt_model,data_loader,0.05,args)
         if args.PCP_ellip_test:
             print('PCP_ellip_test')
-            # cov_spatial = self.estimate_spatial_correlation()
-            picp,eff = PCP_ellip(gt_model,data_loader,0.05, args)
+            y_test_pred, picp, eff = PCP_ellip_nonlinear(gt_model, data_loader, 0.05, args)
 
-        print( type(y_pred), type(y_true))
-        mae, rmse, mape, _, _ = All_Metrics(y_pred, y_true, args.mae_thresh, args.mape_thresh)
+            # y_test_pred, picp,eff = PCP_ellip(gt_model,data_loader,0.05, args)
+
+        y_test_true = y_true [args.tinit:].squeeze(-1)
+        print('y_test_true: ', y_test_true.shape, 'y_test_pred:', y_test_pred.shape)
+
+        mae, rmse, mape, _, _ = All_Metrics(y_test_pred, y_test_true, args.mae_thresh, args.mape_thresh)
         logger.info("Average Horizon, MAE: {:.2f}, RMSE: {:.2f}, MAPE: {:.4f}%,PICP:{:.6f},Ineff:{:.6f}".format(
                    mae, rmse, mape*100,picp*100,eff))
         return picp*100,eff

@@ -12,7 +12,7 @@ import argparse
 import configparser
 from datetime import datetime
 from model.AGCRN import AGCRN as Network, InferenceWithDropout, GT_Predictor
-from model.PCP import PCP
+# from model.PCP import PCP
 from model.correction import RKHSMapping
 from model.BasicTrainer import Trainer, convert_str_2_tensor
 from lib.TrainInits import init_seed
@@ -52,6 +52,8 @@ if initial_args.dataset=='syn_gpvar':
     config_file = './model/syn_gpvar_{}.conf'.format( initial_args.syn_seed )
 elif initial_args.dataset=='syn_tailup':
     config_file = './model/syn_tailup_{}.conf'.format( initial_args.syn_seed )
+elif initial_args.dataset == 'PEMS03_top_20':
+    config_file = './model/PEMS03_AGCRN.conf'
 else:
     config_file = './model/{}_{}.conf'.format(initial_args.dataset, initial_args.model)
 print('Read configuration file: %s' % (config_file))
@@ -67,7 +69,12 @@ second_parser.add_argument('--val_ratio', default=config['data']['val_ratio'], t
 second_parser.add_argument('--test_ratio', default=config['data']['test_ratio'], type=float)
 second_parser.add_argument('--lag', default=config['data']['lag'], type=int)
 second_parser.add_argument('--horizon', default=config['data']['horizon'], type=int)
-second_parser.add_argument('--num_nodes', default=config['data']['num_nodes'], type=int)
+
+if initial_args.dataset == 'PEMS03_top_20':
+    second_parser.add_argument('--num_nodes', default=20, type=int)
+else:
+    second_parser.add_argument('--num_nodes', default=config['data']['num_nodes'], type=int)
+
 second_parser.add_argument('--tod', default=config['data']['tod'], type=eval)
 second_parser.add_argument('--normalizer', default=config['data']['normalizer'], type=str)
 second_parser.add_argument('--column_wise', default=config['data']['column_wise'], type=eval)
@@ -95,7 +102,10 @@ second_parser.add_argument('--max_grad_norm', default=config['train']['max_grad_
 second_parser.add_argument('--teacher_forcing', default=False, type=bool)
 #args.add_argument('--tf_decay_steps', default=2000, type=int, help='teacher forcing decay steps')
 second_parser.add_argument('--real_value', default=config['train']['real_value'], type=eval, help = 'use real value for loss calculation')
-
+if config['train']['real_value']:
+    print('use real value (no scaler)')
+else:
+    print('use scaler')
 
 #test
 second_parser.add_argument('--mae_thresh', default=config['test']['mae_thresh'], type=eval)
@@ -114,14 +124,29 @@ if initial_args.dataset=='syn_gpvar':
     second_parser.add_argument('--noise_mu', default = config['var_para']['noise_mu'], type=str)
     second_parser.add_argument('--noise_sigma', default = config['var_para']['noise_sigma'], type=str)
 elif initial_args.dataset=='syn_tailup':
-    second_parser.add_argument('--w', default=config['var_para']['w'], type=int)
-    second_parser.add_argument('--lmbd', default = 0, type=float, help= "The weight of graph covariance matrix.")
-    second_parser.add_argument('--D', default=config['var_para']['D'], type=str)
+    from model.BasicTrainer import convert_str_2_tensor
+    D_arr = config['var_para']['D']
+    num_nodes = config['data']['num_nodes']
+    cor_m_shape = (num_nodes, num_nodes)
+    D = convert_str_2_tensor(D_arr, cor_m_shape, initial_args.device)
+    second_parser.add_argument('--D', default= D, type=str)
     second_parser.add_argument('--alpha_true', default=config['var_para']['alpha_true'], type=str)
     second_parser.add_argument('--sigma2_true', default=config['var_para']['sigma2_true'], type=str)
     second_parser.add_argument('--phi_true', default=config['var_para']['phi_true'], type=str)
     second_parser.add_argument('--Sigma_spatial', default=config['var_para']['Sigma_spatial'], type=str)
-    second_parser.add_argument('--Cov_type', default = 'ellip', type=str)
+    second_parser.add_argument('--num_nodes', default=20, type=int)
+else:
+    if initial_args.dataset == 'PEMS03_top_20':
+        D_matrix_path = './data/PEMS03/PEMS03_top_20_D.txt'
+    else:
+        D_matrix_path = './data/{}/{}_D.txt'.format(initial_args.dataset, initial_args.dataset)
+    D = np.loadtxt(D_matrix_path)
+    print('loaded D')
+    second_parser.add_argument('--D', default=D, type=str)
+
+second_parser.add_argument('--lmbd', default = 0, type=float, help= "The weight of graph covariance matrix.")
+second_parser.add_argument('--Cov_type', default = 'ellip', type=str)
+second_parser.add_argument('--w', default=2, type=int)
 
 #save model
 second_parser.add_argument('--save_path', default='./saved_model/', type=str)
@@ -172,7 +197,10 @@ train_loader, cal_loader, test_loader, scaler = get_dataloader(args,
                                                                normalizer=args.normalizer,
                                                                tod=args.tod, dow=False,
                                                                weather=False, single=True)
-
+####
+if not args.real_value:
+    scaler = None
+####
 from lib.metrics import MAE_torch
 def masked_mae_loss(scaler, mask_value):
     def loss(preds, labels):
@@ -276,6 +304,8 @@ elif args.mode == 'test_gt':
 
 elif args.mode == 'test':
 
+    # No trained model
+    model.load_state_dict(torch.load(model_path, map_location=args.device))
     picp, eff = trainer.gt_test(model, None, trainer.args, test_loader, scaler, trainer.logger)
 
     print(f"{args.dataset},{args.syn_seed},{args.lmbd},{args.gamma},{args.Cov_type},{picp},{eff}")

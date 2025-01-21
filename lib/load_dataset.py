@@ -1,12 +1,16 @@
 import os
 import numpy as np
+import re
+def check_dataset_format(dataset_name):
+    pattern = r"PEMS\d+_top_\d+$"
+    return bool(re.search(pattern, dataset_name))
 
 def load_st_dataset(dataset, seed = 1):
     #output B, N, D
-    if dataset == 'PEMSD4':
+    if dataset == 'PEMS04':
         data_path = os.path.join('./data/PEMS04/PEMS04.npz')
         data = np.load(data_path)['data'][:, :, 0]  #only the first dimension, traffic flow data
-    elif dataset == 'PEMSD8':
+    elif dataset == 'PEMS08':
         data_path = os.path.join('./data/PEMS08/PEMS08.npz')
         data = np.load(data_path)['data'][:, :, 0]  #only the first dimension, traffic flow data
     elif dataset == 'PEMS03':
@@ -15,6 +19,10 @@ def load_st_dataset(dataset, seed = 1):
     elif dataset == 'PEMS07':
         data_path = os.path.join('./data/PEMS07/PEMS07.npz')
         data = np.load(data_path)['data'][:, :, 0]  #only the first dimension, traffic flow data
+    elif dataset == 'PEMS03_top_20':
+        data_path = './data/PEMS03/PEMS03_top_20.txt'
+        data = np.loadtxt(data_path)
+        print(data.shape)
     elif dataset == 'syn_gpvar' or dataset == 'syn_tailup':
         if dataset == 'syn_gpvar':
             path = './data/syn_data/syn_gpvar_{}.npz'.format(seed)

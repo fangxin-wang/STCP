@@ -12,3 +12,5 @@
 
 python3 -W ignore data/gen_syn_graph.py --syn_seed 1212  --node_num 5
 python3 -W ignore data/gen_syn_graph.py --syn_seed 1213  --node_num 10
+
+python3 -W ignore data/gen_syn_graph_tailup.py
