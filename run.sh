@@ -4,10 +4,10 @@ OUTPUT_FILE="results.csv"
 
 echo "DATASET,SEED,LMBD,gamma,COV,metric1,metric2" > $OUTPUT_FILE
 
-for DATASET in  "PEMS03"   #  'syn_gpvar' # "PEMS07" (larger one) #"PEMS03" #"PEMS08" "PEMS04"
+for DATASET in  "syn_tailup_gen"   #  'syn_gpvar' # "PEMS07" (larger one) #"PEMS03" #"PEMS08" "PEMS04"
   do
-    if [ $DATASET == "syn_tailup" ]; then
-      syn_seeds=(  10 )
+    if [ $DATASET == "syn_tailup_gen" ]; then
+      syn_seeds=(  20 )
     else
       syn_seeds=( 0 )
     fi

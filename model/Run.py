@@ -52,6 +52,8 @@ if initial_args.dataset=='syn_gpvar':
     config_file = './model/syn_gpvar_{}.conf'.format( initial_args.syn_seed )
 elif initial_args.dataset=='syn_tailup':
     config_file = './model/syn_tailup_{}.conf'.format( initial_args.syn_seed )
+elif initial_args.dataset=='syn_tailup_gen':
+    config_file = './model/syn_tailup_gen_{}.conf'.format( initial_args.syn_seed )
 elif initial_args.dataset == 'PEMS03_top_20':
     config_file = './model/PEMS03_AGCRN.conf'
 else:
@@ -134,7 +136,11 @@ elif initial_args.dataset=='syn_tailup':
     second_parser.add_argument('--sigma2_true', default=config['var_para']['sigma2_true'], type=str)
     second_parser.add_argument('--phi_true', default=config['var_para']['phi_true'], type=str)
     second_parser.add_argument('--Sigma_spatial', default=config['var_para']['Sigma_spatial'], type=str)
-    second_parser.add_argument('--num_nodes', default=20, type=int)
+
+elif initial_args.dataset=='syn_tailup_gen':
+    second_parser.add_argument('--beta_true', default=config['var_para']['beta'], type=int)
+    second_parser.add_argument('--sigma_true', default=config['var_para']['sigma_true'], type=int)
+
 else:
     if initial_args.dataset == 'PEMS03_top_20':
         D_matrix_path = './data/PEMS03/PEMS03_top_20_D.txt'

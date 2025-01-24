@@ -306,7 +306,6 @@ def PCP_ellip(model, data_loader, alpha, args):
 
 def PCP_ellip_nonlinear(model,data_loader,alpha,args):
     """
-    Original Verison with only sample covariance.
     Use ANY prediction model instead of tailup.
     :param model: Prediction Model.
     :param data_loader: Test data loader.
