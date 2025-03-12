@@ -158,4 +158,8 @@ cython_debug/
 log/
 logs/
 final_log/
-save_model/
+saved_model/
+
+model/plot/
+
+results_syn_tailup_gen_seed30.csv
