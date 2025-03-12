@@ -1,0 +1,12 @@
+0.000000 inf inf inf inf inf inf inf 1.687000 1.981000 4.842000 5.101000
+0.400000 0.000000 inf inf inf inf inf inf 2.087000 2.381000 5.242000 5.501000
+0.633000 0.233000 0.000000 inf inf inf inf inf 2.320000 2.614000 5.475000 5.734000
+0.865000 0.465000 0.232000 0.000000 inf inf inf inf 2.552000 2.846000 5.707000 5.966000
+inf inf inf inf 0.000000 inf inf inf inf inf inf inf
+inf inf inf inf 1.150000 0.000000 inf inf inf inf inf inf
+3.648000 inf inf inf inf inf 0.000000 1.275000 5.335000 5.629000 8.490000 8.749000
+2.373000 inf inf inf inf inf inf 0.000000 4.060000 4.354000 7.215000 7.474000
+inf inf inf inf inf inf inf inf 0.000000 0.294000 3.155000 3.414000
+inf inf inf inf inf inf inf inf inf 0.000000 2.861000 3.120000
+inf inf inf inf inf inf inf inf inf inf 0.000000 0.259000
+inf inf inf inf inf inf inf inf inf inf inf 0.000000
