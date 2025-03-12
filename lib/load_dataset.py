@@ -23,15 +23,11 @@ def load_st_dataset(dataset, seed = 1):
         data_path = './data/PEMS03/PEMS03_top_20.txt'
         data = np.loadtxt(data_path)
         print(data.shape)
-    elif dataset == 'syn_gpvar' or dataset == 'syn_tailup' or dataset == 'syn_tailup_gen':
+    elif dataset == 'syn_gpvar' or dataset == 'syn_tailup':
         if dataset == 'syn_gpvar':
             path = './data/syn_data/syn_gpvar_{}.npz'.format(seed)
-        elif dataset == 'syn_tailup':
-            path = './data/syn_data/syn_tailup_{}.npz'.format(seed)
-        elif dataset == 'syn_tailup_gen':
-            path = './data/syn_data/syn_tailup_gen_{}.npz'.format(seed)
         else:
-            raise ValueError
+            path = './data/syn_data/syn_tailup_{}.npz'.format(seed)
         data_path = os.path.join(path)
         loaded_data = np.load(data_path)
         data = loaded_data['array']
