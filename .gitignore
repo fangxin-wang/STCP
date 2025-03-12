@@ -9,7 +9,8 @@ __pycache__/
 .DS_Store
 
 # Data
-data/
+data/data_utils
+data/syn_data
 dataset/
 
 # checkpoint
@@ -160,6 +161,5 @@ logs/
 final_log/
 saved_model/
 
-model/plot/
 
 results_syn_tailup_gen_seed30.csv
