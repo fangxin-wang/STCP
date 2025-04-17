@@ -5,50 +5,121 @@ from lib.add_window import Add_Window_Horizon
 from lib.load_dataset import load_st_dataset
 from lib.normalization import NScaler, MinMax01Scaler, MinMax11Scaler, StandardScaler, ColumnMinMaxScaler
 
-def normalize_dataset(data, normalizer, column_wise=False):
+
+def normalize_dataset(train_data, val_data, test_data, normalizer, column_wise=False):
+    """
+    Normalizes train, validation, and test datasets based on parameters computed from train_data.
+
+    Args:
+        train_data (np.array): Training dataset.
+        val_data (np.array): Validation dataset.
+        test_data (np.array): Test dataset.
+        normalizer (str): One of 'max01', 'max11', 'std', 'None', or 'cmax'.
+        column_wise (bool): If True, compute normalization parameters for each feature column separately.
+
+    Returns:
+        Tuple: (normalized_train, normalized_val, normalized_test, scaler)
+    """
     if normalizer == 'max01':
         if column_wise:
-            minimum = data.min(axis=0, keepdims=True)
-            maximum = data.max(axis=0, keepdims=True)
+            minimum = train_data.min(axis=0, keepdims=True)
+            maximum = train_data.max(axis=0, keepdims=True)
         else:
-            minimum = data.min()
-            maximum = data.max()
+            minimum = train_data.min()
+            maximum = train_data.max()
         scaler = MinMax01Scaler(minimum, maximum)
-        data = scaler.transform(data)
+        normalized_train = scaler.transform(train_data)
+        normalized_val = scaler.transform(val_data)
+        normalized_test = scaler.transform(test_data)
         print('Normalize the dataset by MinMax01 Normalization')
     elif normalizer == 'max11':
         if column_wise:
-            minimum = data.min(axis=0, keepdims=True)
-            maximum = data.max(axis=0, keepdims=True)
+            minimum = train_data.min(axis=0, keepdims=True)
+            maximum = train_data.max(axis=0, keepdims=True)
         else:
-            minimum = data.min()
-            maximum = data.max()
+            minimum = train_data.min()
+            maximum = train_data.max()
         scaler = MinMax11Scaler(minimum, maximum)
-        data = scaler.transform(data)
+        normalized_train = scaler.transform(train_data)
+        normalized_val = scaler.transform(val_data)
+        normalized_test = scaler.transform(test_data)
         print('Normalize the dataset by MinMax11 Normalization')
     elif normalizer == 'std':
         if column_wise:
-            mean = data.mean(axis=0, keepdims=True)
-            std = data.std(axis=0, keepdims=True)
+            mean = train_data.mean(axis=0, keepdims=True)
+            std = train_data.std(axis=0, keepdims=True)
         else:
-            mean = data.mean()
-            std = data.std()
+            mean = train_data.mean()
+            std = train_data.std()
         scaler = StandardScaler(mean, std)
-        data = scaler.transform(data)
+        normalized_train = scaler.transform(train_data)
+        normalized_val = scaler.transform(val_data)
+        normalized_test = scaler.transform(test_data)
         print('Normalize the dataset by Standard Normalization')
     elif normalizer == 'None':
         scaler = NScaler()
-        data = scaler.transform(data)
+        normalized_train = scaler.transform(train_data)
+        normalized_val = scaler.transform(val_data)
+        normalized_test = scaler.transform(test_data)
         print('Does not normalize the dataset')
     elif normalizer == 'cmax':
-        #column min max, to be depressed
-        #note: axis must be the spatial dimension, please check !
-        scaler = ColumnMinMaxScaler(data.min(axis=0), data.max(axis=0))
-        data = scaler.transform(data)
+        # Note: for column min-max, the axis is assumed to be the feature (column) dimension.
+        scaler = ColumnMinMaxScaler(train_data.min(axis=0), train_data.max(axis=0))
+        normalized_train = scaler.transform(train_data)
+        normalized_val = scaler.transform(val_data)
+        normalized_test = scaler.transform(test_data)
         print('Normalize the dataset by Column Min-Max Normalization')
     else:
-        raise ValueError
-    return data, scaler
+        raise ValueError(f"Unknown normalizer type: {normalizer}")
+
+    return normalized_train, normalized_val, normalized_test, scaler
+
+
+
+# def normalize_dataset(data, normalizer, column_wise=False):
+#     if normalizer == 'max01':
+#         if column_wise:
+#             minimum = data.min(axis=0, keepdims=True)
+#             maximum = data.max(axis=0, keepdims=True)
+#         else:
+#             minimum = data.min()
+#             maximum = data.max()
+#         scaler = MinMax01Scaler(minimum, maximum)
+#         data = scaler.transform(data)
+#         print('Normalize the dataset by MinMax01 Normalization')
+#     elif normalizer == 'max11':
+#         if column_wise:
+#             minimum = data.min(axis=0, keepdims=True)
+#             maximum = data.max(axis=0, keepdims=True)
+#         else:
+#             minimum = data.min()
+#             maximum = data.max()
+#         scaler = MinMax11Scaler(minimum, maximum)
+#         data = scaler.transform(data)
+#         print('Normalize the dataset by MinMax11 Normalization')
+#     elif normalizer == 'std':
+#         if column_wise:
+#             mean = data.mean(axis=0, keepdims=True)
+#             std = data.std(axis=0, keepdims=True)
+#         else:
+#             mean = data.mean()
+#             std = data.std()
+#         scaler = StandardScaler(mean, std)
+#         data = scaler.transform(data)
+#         print('Normalize the dataset by Standard Normalization')
+#     elif normalizer == 'None':
+#         scaler = NScaler()
+#         data = scaler.transform(data)
+#         print('Does not normalize the dataset')
+#     elif normalizer == 'cmax':
+#         #column min max, to be depressed
+#         #note: axis must be the spatial dimension, please check !
+#         scaler = ColumnMinMaxScaler(data.min(axis=0), data.max(axis=0))
+#         data = scaler.transform(data)
+#         print('Normalize the dataset by Column Min-Max Normalization')
+#     else:
+#         raise ValueError
+#     return data, scaler
 
 def split_data_by_days(data, val_days, test_days, interval=60):
     '''
@@ -85,13 +156,17 @@ def get_dataloader(args, normalizer = 'std', tod=False, dow=False, weather=False
     #load raw st dataset
     data = load_st_dataset(args.dataset, args.syn_seed)        # B, N, D
     #normalize st data
-    _, scaler = normalize_dataset(data, normalizer, args.column_wise)
+    # Set as : _, scaler Then no normalize
 
     #spilit dataset by days or by ratio
     if args.test_ratio > 1:
         data_train, data_val, data_test = split_data_by_days(data, args.val_ratio, args.test_ratio)
     else:
         data_train, data_val, data_test = split_data_by_ratio(data, args.val_ratio, args.test_ratio)
+    mean = np.mean(data_train, axis=(0, 1))
+    std = np.std(data_train, axis=(0, 1))
+
+    data_train, data_val, data_test, scaler = normalize_dataset(data_train, data_val, data_test, normalizer, args.column_wise)
     #add time window
     x_tra, y_tra = Add_Window_Horizon(data_train, args.lag, args.horizon, single)
     x_val, y_val = Add_Window_Horizon(data_val, args.lag, args.horizon, single)
@@ -106,7 +181,7 @@ def get_dataloader(args, normalizer = 'std', tod=False, dow=False, weather=False
     else:
         val_dataloader = data_loader(x_val, y_val, args.batch_size, shuffle=False, drop_last=True)
     test_dataloader = data_loader(x_test, y_test, args.batch_size, shuffle=False, drop_last=False)
-    return train_dataloader, val_dataloader, test_dataloader, scaler
+    return train_dataloader, val_dataloader, test_dataloader, scaler, std, mean
 
 
 if __name__ == '__main__':

@@ -1,9 +1,13 @@
 import os
 import numpy as np
 import re
-def check_dataset_format(dataset_name):
-    pattern = r"PEMS\d+_top_\d+$"
-    return bool(re.search(pattern, dataset_name))
+
+def parse_d_from_str(s: str) -> int:
+    match = re.match(r"PEMS03_top_(\d+)", s)
+    if match:
+        return int(match.group(1))
+    else:
+        return False
 
 def load_st_dataset(dataset, seed = 1):
     #output B, N, D
@@ -19,8 +23,12 @@ def load_st_dataset(dataset, seed = 1):
     elif dataset == 'PEMS07':
         data_path = os.path.join('./data/PEMS07/PEMS07.npz')
         data = np.load(data_path)['data'][:, :, 0]  #only the first dimension, traffic flow data
-    elif dataset == 'PEMS03_top_20':
-        data_path = './data/PEMS03/PEMS03_top_20.txt'
+    elif parse_d_from_str(dataset):
+        data_path = './data/PEMS03/PEMS03_top_{}.txt'.format(parse_d_from_str(dataset))
+        data = np.loadtxt(data_path)
+        print(data.shape)
+    elif dataset == 'PEMSBAY':
+        data_path = './data/PEMSBAY/pems_bay_sub.txt'
         data = np.loadtxt(data_path)
         print(data.shape)
     elif dataset == 'syn_gpvar' or dataset == 'syn_tailup':

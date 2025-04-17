@@ -74,12 +74,30 @@ def network_distance(G, source, target, positions):
         return np.inf  # 无路径时返回无穷大
 
 # 构建空间协方差矩阵
-def build_spatial_covariance(D, sigma2, phi):
+def build_spatial_unbiased(D, sigma2, phi):
     Sigma_spatial = sigma2 * np.exp(-D / phi)
     Sigma_spatial[D == np.inf] = 0
     np.fill_diagonal(Sigma_spatial, sigma2)
     Sigma_spatial = np.triu(Sigma_spatial) + np.triu(Sigma_spatial, 1).T
 
+    return Sigma_spatial
+def build_spatial_gen(beta, phi, n, weights, dist_matrix):
+
+    Sigma = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for k in range(n):
+            if dist_matrix[i, k] > 1e3:
+                Sigma[i, k] = 0
+            else:
+                dist_ik = dist_matrix[i, k]
+                Sigma[i, k] = 0.5 * beta * np.sqrt(weights[i] / weights[k]) * np.exp(-dist_ik / phi)
+    return Sigma
+
+def build_spatial_covariance(args, beta, phi, n, weights, dist_matrix):
+    if args.dataset == 'syn_tailup_gen':
+        Sigma_spatial = build_spatial_gen(beta, phi, n, weights, dist_matrix)
+    else: # args.dataset == 'syn_tailup':
+        Sigma_spatial = build_spatial_unbiased(dist_matrix, beta, phi)
     return Sigma_spatial
 
 def generate_tailup_data(D, sites, positions, time_steps, sigma2_true, phi_true):
@@ -166,7 +184,7 @@ def generate_config_file(config_path):
     config['var_para'] = { 'w': w,
                            'D': np.array2string(D),
                            'alpha_true': np.array2string(np.array(alpha_true )),
-                           'sigma2_true': sigma2_true,
+                           'beta_true': sigma2_true,
                            'phi_true': phi_true,
                            'Sigma_spatial': np.array2string (Sigma_spatial )}
 

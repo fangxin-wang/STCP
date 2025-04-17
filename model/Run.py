@@ -1,17 +1,21 @@
 
 import os
 import sys
+import pickle
+from torch_geometric.utils import from_networkx
+
 file_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 sys.path.append(file_dir)
 import matplotlib.pyplot as plt
 import torch
+import re
 import numpy as np
 import torch.nn as nn
 import argparse
 import configparser
 from datetime import datetime
-from model.AGCRN import AGCRN as Network, InferenceWithDropout, GT_Predictor
+from model.AGCRN import AGCRN, InferenceWithDropout, GT_Predictor
 # from model.PCP import PCP
 from model.correction import RKHSMapping
 from model.BasicTrainer import Trainer, convert_str_2_tensor
@@ -19,6 +23,10 @@ from lib.TrainInits import init_seed
 from lib.dataloader import get_dataloader
 from lib.TrainInits import print_model_parameters
 from correction import train_cal_correction,train_cal_correction_gnn
+from STPredictor import RecurrentGCN, TemporalGNN
+import networkx as nx
+
+torch.set_default_dtype(torch.float32)
 #*************************************************************************#
 
 
@@ -46,14 +54,23 @@ initial_parser.add_argument("--link_pred", action="store_true", default=False, h
 
 initial_args, remaining_argv = initial_parser.parse_known_args()
 
+
+def parse_d_from_str(s: str) -> int:
+    match = re.match(r"PEMS03_top_(\d+)", s)
+    if match:
+        return int(match.group(1))
+    else:
+        return False
+
+
 #get configuration
-print(initial_args.dataset)
+print(initial_args.dataset, parse_d_from_str(initial_args.dataset) )
 if initial_args.dataset=='syn_gpvar':
     config_file = './model/syn_gpvar_{}.conf'.format( initial_args.syn_seed )
 elif initial_args.dataset=='syn_tailup':
     config_file = './model/syn_tailup_{}.conf'.format( initial_args.syn_seed )
-elif initial_args.dataset == 'PEMS03_top_20':
-    config_file = './model/PEMS03_AGCRN.conf'
+elif parse_d_from_str(initial_args.dataset):
+    config_file = './model/PEMS03_{}.conf'.format(initial_args.model)
 else:
     config_file = './model/{}_{}.conf'.format(initial_args.dataset, initial_args.model)
 print('Read configuration file: %s' % (config_file))
@@ -70,8 +87,8 @@ second_parser.add_argument('--test_ratio', default=config['data']['test_ratio'],
 second_parser.add_argument('--lag', default=config['data']['lag'], type=int)
 second_parser.add_argument('--horizon', default=config['data']['horizon'], type=int)
 
-if initial_args.dataset == 'PEMS03_top_20':
-    second_parser.add_argument('--num_nodes', default=20, type=int)
+if parse_d_from_str(initial_args.dataset):
+    second_parser.add_argument('--num_nodes', default=parse_d_from_str(initial_args.dataset), type=int)
 else:
     second_parser.add_argument('--num_nodes', default=config['data']['num_nodes'], type=int)
 
@@ -136,8 +153,10 @@ elif initial_args.dataset=='syn_tailup':
     second_parser.add_argument('--Sigma_spatial', default=config['var_para']['Sigma_spatial'], type=str)
     second_parser.add_argument('--num_nodes', default=20, type=int)
 else:
-    if initial_args.dataset == 'PEMS03_top_20':
-        D_matrix_path = './data/PEMS03/PEMS03_top_20_D.txt'
+    if parse_d_from_str(initial_args.dataset):
+        D_matrix_path = './data/PEMS03/PEMS03_top_{}_D.txt'.format(parse_d_from_str(initial_args.dataset))
+    elif initial_args.dataset == 'PEMSBAY':
+        D_matrix_path = './data/PEMSBAY/pems_bay_sub_D.txt'
     else:
         D_matrix_path = './data/{}/{}_D.txt'.format(initial_args.dataset, initial_args.dataset)
     D = np.loadtxt(D_matrix_path)
@@ -153,9 +172,9 @@ second_parser.add_argument('--save_path', default='./saved_model/', type=str)
 if initial_args.dataset=='syn_gpvar':
     second_parser.add_argument('--save_filename', default='syn_gpvar_{}_{}.pth'.format(initial_args.syn_seed, 'saved_model'), type=str)
 elif initial_args.dataset=='syn_tailup':
-    second_parser.add_argument('--save_filename', default='syn_tailup_{}_{}.pth'.format(initial_args.syn_seed, 'saved_model'), type=str)
+    second_parser.add_argument('--save_filename', default='syn_tailup_{}_{}.pth'.format(initial_args.syn_seed, initial_args.model ), type=str)
 else:
-    second_parser.add_argument('--save_filename', default='{}_{}.pth'.format(initial_args.dataset, 'saved_model'), type=str)
+    second_parser.add_argument('--save_filename', default='{}_{}.pth'.format(initial_args.dataset, initial_args.model), type=str)
 
 
 #correction
@@ -165,6 +184,8 @@ second_parser.add_argument('--correct_ratio', default=0.5, type=float)
 second_parser.add_argument('--correctionmode', default='mlp', type=str)
 second_parser.add_argument('--alpha', default=0.05,type=int)
 second_parser.add_argument('--size_loss_weight', default=1, type=float)
+second_parser.add_argument('--weight_type', default='fixed', type=str)
+
 
 print(f"Final parsed dataset: {initial_args.dataset}")
 args = second_parser.parse_args(remaining_argv)
@@ -180,8 +201,73 @@ else:
 
 print("horizon",args.horizon,"num_nodes", args.num_nodes)
 
+
+#load dataset
+train_loader, cal_loader, test_loader, scaler,  std, mean = get_dataloader(args,
+                                                               normalizer=args.normalizer,
+                                                               tod=args.tod, dow=False,
+                                                               weather=False, single=True)
+
+args.scaler = scaler
+if args.normalizer == 'None':
+    args.std, args.mean = 1, 0
+else:
+    args.std, args.mean = torch.Tensor(std).float(), torch.Tensor(mean).float()
+    print('std, mean: ', std, mean)
+# ####
+# if not args.real_value:
+#     scaler = None
+# ####
+from lib.metrics import MAE_torch
+
 #init model
-model = Network(args)
+
+def norm_weight(distances):
+    # Create a mask for finite distances.
+    distances = distances.float()
+    finite_mask = torch.isfinite(distances).bool()
+
+    # Compute standard deviation only over finite distances.
+    if torch.any(finite_mask):
+        std = torch.std(distances[finite_mask])
+    else:
+        std = torch.tensor(1.0, device=distances.device)
+
+    # Prevent division by zero.
+    if std.item() == 0:
+        std = torch.tensor(1e-6, device=distances.device)
+
+    # Allocate an output tensor.
+    normalized_weights = torch.zeros_like(distances, dtype=torch.float)
+
+    # Apply the Gaussian kernel for finite distances.
+    normalized_weights[finite_mask] = torch.exp(- distances[finite_mask] ** 2 / (std ** 2))
+
+    return normalized_weights
+
+if args.model == 'AGCRN':
+    model = AGCRN(args)
+else:
+    if parse_d_from_str(initial_args.dataset):
+        d = parse_d_from_str(initial_args.dataset)
+        file_path = f"data/PEMS03/G_sub_{d}.gpickle"
+        with open(file_path, 'rb') as f:
+            G = pickle.load(f)
+        # G.remove_edges_from(list(nx.selfloop_edges(G)))
+
+        data = from_networkx(G, group_edge_attrs=['weight'])
+        distances = data.edge_attr.squeeze(1)
+        distances = norm_weight(distances)
+        # print(distances)
+        data.edge_weight = torch.Tensor(distances)
+        args.G = data
+    else:
+        raise ValueError('Not support dataset except PEMSO3 12 nodes')
+    if args.model == 'DCRNN':
+        model = RecurrentGCN(args)
+    else:
+        model = TemporalGNN(args)
+
 
 model = model.to(args.device)
 for p in model.parameters():
@@ -192,32 +278,37 @@ for p in model.parameters():
 
 #print_model_parameters(model, only_num=False)
 
-#load dataset
-train_loader, cal_loader, test_loader, scaler = get_dataloader(args,
-                                                               normalizer=args.normalizer,
-                                                               tod=args.tod, dow=False,
-                                                               weather=False, single=True)
-####
-if not args.real_value:
-    scaler = None
-####
-from lib.metrics import MAE_torch
-def masked_mae_loss(scaler, mask_value):
+# def masked_mae_loss(y_pred, y_true):
+#
+#     mask = (y_true != 0).float()
+#     mask /= mask.mean()
+#     loss = torch.abs(y_pred - y_true)
+#     loss = loss * mask
+#     # trick for nans: https://discuss.pytorch.org/t/how-to-set-nan-in-tensor-to-0/3918/3
+#     loss[loss != loss] = 0
+#     return loss.mean()
+
+def masked_mae_loss(args, mask_value):
+    # scaler = args.scaler
     def loss(preds, labels):
-        if scaler:
-            preds = scaler.inverse_transform(preds)
-            labels = scaler.inverse_transform(labels)
+        # if scaler:
+        #     preds = scaler.inverse_transform(preds)
+        #     labels = scaler.inverse_transform(labels)
+        preds = torch.nan_to_num(preds, nan=0.0)
+        labels = torch.nan_to_num(labels, nan=0.0)#.squeeze(1)
+        if args.model == 'A3TGCN':
+            labels = labels.squeeze(1)
         mae = MAE_torch(pred=preds, true=labels, mask_value=mask_value)
         return mae
     return loss
 
 #init loss function, optimizer
 if args.loss_func == 'mask_mae':
-    loss = masked_mae_loss(scaler, mask_value=0.0)
+    loss = masked_mae_loss(args, mask_value=0.0)
 elif args.loss_func == 'mae':
-    loss = torch.nn.L1Loss().to(args.device)
+    loss = torch.nn.L1Loss(args).to(args.device)
 elif args.loss_func == 'mse':
-    loss = torch.nn.MSELoss().to(args.device)
+    loss = torch.nn.MSELoss(args).to(args.device)
 else:
     raise ValueError
 
@@ -247,7 +338,6 @@ print("Current mode: ", args.mode)
 
 # Save the model
 model_path = os.path.join(args.save_path, args.save_filename)
-print('*************** Base Model saved successfully at {}'.format(model_path))
 
 if args.mode == 'train':
     trainer.train()
@@ -255,6 +345,8 @@ if args.mode == 'train':
         os.makedirs(args.save_path)
     print(model_path)
     torch.save(model.state_dict(), model_path)
+    print('*************** Base Model saved successfully at {}'.format(model_path))
+
 
 elif args.mode == 'calcorrection':
 
@@ -275,22 +367,22 @@ elif args.mode == 'calcorrection':
     # plt.plot(loss_cpu)
     # plt.savefig('./correction_loss_gnn_plot.png')
 
-elif args.mode == 'test_map':
-
-    print("Start test  with gamma: {}, use mapping: {}".format(args.gamma,args.ACI_MLP_test))
-    correctmodel=RKHSMapping(args.num_nodes,args.map_dim)
-    correctmodel_path = '{}map_dim{}_{}'.format(args.save_path,args.map_dim,args.save_filename)
-    # model_path = '{}{}'.format(args.save_path,args.save_filename)
-    correctmodel.load_state_dict(
-        torch.load( correctmodel_path,
-                   map_location=args.device))
-    
-    #mapmodel = RKHSMapping(args.num_nodes,args.map_dim).to(args.device)
-    #mapmodel.load_state_dict(torch.load('{}map_{}'.format(args.save_path,args.save_filename),map_location=args.device))
-    #model.load_state_dict(torch.load(model_path,map_location=args.device))
-    print("Start testing: Load training model from {} and correction model{}".format( model_path,correctmodel_path) )
-    
-    trainer.test_map(model, correctmodel,trainer.args, test_loader, scaler, trainer.logger)
+# elif args.mode == 'test_map':
+#
+#     print("Start test  with gamma: {}, use mapping: {}".format(args.gamma,args.ACI_MLP_test))
+#     correctmodel=RKHSMapping(args.num_nodes,args.map_dim)
+#     correctmodel_path = '{}map_dim{}_{}'.format(args.save_path,args.map_dim,args.save_filename)
+#     # model_path = '{}{}'.format(args.save_path,args.save_filename)
+#     correctmodel.load_state_dict(
+#         torch.load( correctmodel_path,
+#                    map_location=args.device))
+#
+#     #mapmodel = RKHSMapping(args.num_nodes,args.map_dim).to(args.device)
+#     #mapmodel.load_state_dict(torch.load('{}map_{}'.format(args.save_path,args.save_filename),map_location=args.device))
+#     #model.load_state_dict(torch.load(model_path,map_location=args.device))
+#     print("Start testing: Load training model from {} and correction model{}".format( model_path,correctmodel_path) )
+#
+#     trainer.test_map(model, correctmodel,trainer.args, test_loader, scaler, trainer.logger)
 
 elif args.mode == 'test_gt':
 
@@ -304,11 +396,24 @@ elif args.mode == 'test_gt':
 
 elif args.mode == 'test':
 
-    # No trained model
-    model.load_state_dict(torch.load(model_path, map_location=args.device))
-    picp, eff = trainer.gt_test(model, None, trainer.args, test_loader, scaler, trainer.logger)
+    from torch.utils.data import ConcatDataset, DataLoader
 
-    print(f"{args.dataset},{args.syn_seed},{args.lmbd},{args.gamma},{args.Cov_type},{picp},{eff}")
+    # Combine validation and test datasets
+    combined_dataset = ConcatDataset([cal_loader.dataset, test_loader.dataset])
+    combined_data_loader = DataLoader(combined_dataset, batch_size=32, shuffle=False)
+
+    # No trained model
+    if args.dataset =='syn_tailup' or args.dataset =='syn_tailup_gen':
+        model = None
+    else:
+        model.load_state_dict(torch.load(model_path, map_location=args.device))
+
+    print(f"{args.dataset},{args.syn_seed},{args.tinit}, {args.lmbd},{args.gamma},{args.Cov_type}")
+
+    # picp, eff = trainer.gt_test(model, None, trainer.args, test_loader, scaler, trainer.logger)
+    picp_mean, eff_mean, eff_var = trainer.gt_test(model, None, trainer.args, combined_data_loader, scaler, trainer.logger)
+
+    print(f"{args.dataset},{args.syn_seed},{args.tinit}, {args.lmbd}, {args.gamma},{args.Cov_type},{picp_mean}, {eff_mean},  {eff_var}")
 
 '''
 elif args.mode == 'testgnn':

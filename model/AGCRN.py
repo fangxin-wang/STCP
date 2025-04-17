@@ -79,40 +79,39 @@ class AGCRN(nn.Module):
         output = output.squeeze(-1).reshape(-1, self.horizon, self.output_dim, self.num_node)
         output = output.permute(0, 1, 3, 2)                             #B, T, N, C
 
-        return output,latent
+        return output,_
 
-
-class AGCRN_LinkPrediction(nn.Module):
-    def __init__(self, args):
-        super(AGCRN_LinkPrediction, self).__init__()
-        # Initialize AGCRN with given args
-        self.agcrn = AGCRN(args)
-
-    def forward(self, source, targets, node_pairs, teacher_forcing_ratio=0.5):
-        """
-        source: Input sequence (B, T_1, N, D)
-        targets: Target sequence (B, T_2, N, D)
-        node_pairs: List of node pairs (i, j) for link prediction
-        teacher_forcing_ratio: Teacher forcing ratio for training
-        """
-        # Forward pass through AGCRN to get node embeddings
-        init_state = self.agcrn.encoder.init_hidden(source.shape[0])
-        output, hidden_states = self.agcrn.encoder(source, init_state, self.agcrn.node_embeddings)
-
-        # Extract the final hidden state for each node
-        final_latent_vectors = hidden_states[-1]  # Shape: (B, N, hidden_dim)
-
-        # Link prediction
-        link_logits = []
-        for (i, j) in node_pairs:
-            # Using dot product for similarity
-            sim = torch.sum(final_latent_vectors[:, i, :] * final_latent_vectors[:, j, :], dim=-1)
-            link_logits.append(sim)
-
-        link_logits = torch.stack(link_logits, dim=1)  # Shape: (B, num_node_pairs)
-        
-        return link_logits
-
+# class AGCRN_LinkPrediction(nn.Module):
+#     def __init__(self, args):
+#         super(AGCRN_LinkPrediction, self).__init__()
+#         # Initialize AGCRN with given args
+#         self.agcrn = AGCRN(args)
+#
+#     def forward(self, source, targets, node_pairs, teacher_forcing_ratio=0.5):
+#         """
+#         source: Input sequence (B, T_1, N, D)
+#         targets: Target sequence (B, T_2, N, D)
+#         node_pairs: List of node pairs (i, j) for link prediction
+#         teacher_forcing_ratio: Teacher forcing ratio for training
+#         """
+#         # Forward pass through AGCRN to get node embeddings
+#         init_state = self.agcrn.encoder.init_hidden(source.shape[0])
+#         output, hidden_states = self.agcrn.encoder(source, init_state, self.agcrn.node_embeddings)
+#
+#         # Extract the final hidden state for each node
+#         final_latent_vectors = hidden_states[-1]  # Shape: (B, N, hidden_dim)
+#
+#         # Link prediction
+#         link_logits = []
+#         for (i, j) in node_pairs:
+#             # Using dot product for similarity
+#             sim = torch.sum(final_latent_vectors[:, i, :] * final_latent_vectors[:, j, :], dim=-1)
+#             link_logits.append(sim)
+#
+#         link_logits = torch.stack(link_logits, dim=1)  # Shape: (B, num_node_pairs)
+#
+#         return link_logits
+#
 
 ####### TODO
 
