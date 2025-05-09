@@ -11,7 +11,7 @@ from sklearn.linear_model import LinearRegression
 import torch.nn.functional as F
 from  model.adaptive_multi import aci_graph, aci_map_graph
 # from data.gen_syn_graph_tailup import estimate_tailup_para
-from model.PCP import PCP_ellip, PCP_ellip_nonlinear, cp_square
+from model.PCP import PCP_ellip, PCP_ellip_nonlinear, cp_square, square_nonlinear
 import re
 
 class Trainer(object):
@@ -289,7 +289,7 @@ class Trainer(object):
             # if args.PCP_ellip_test:
 
             if args.Cov_type == 'square' :
-                y_test_pred, picp_mean, eff_mean, eff_var = cp_square(gt_model,data_loader,0.05, args)
+                y_test_pred, picp_mean, eff_mean, eff_var = square_nonlinear(gt_model,data_loader,0.05, args)
             else:
                 y_test_pred, picp_mean, eff_mean, eff_var = PCP_ellip_nonlinear(gt_model, data_loader, 0.05, args)
 
