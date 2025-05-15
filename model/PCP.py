@@ -1,4 +1,3 @@
-
 import numpy as np
 
 import torch
@@ -339,6 +338,102 @@ def cp_square( model, data_loader, alpha, args ):
         Y_pred_all = torch.stack(Y_pred_all)
     return Y_pred_all, picp, ineff, eff_var #, picp, ineff
 
+def square_nonlinear(model, data_loader, alpha, args):
+    """
+    Use ANY prediction model instead of linear regressor.
+    :param model: Prediction Model.
+    :param data_loader: Test data loader.
+    :param alpha: Desired miscoverage rate.
+    :return:
+    """
+    y_true=[]
+    y_pred=[]
+    x=[]
+    #model.to(args.device)
+    with torch.no_grad():
+            for batch_idx, (data, target) in enumerate(data_loader):
+                data = data[..., :args.input_dim]
+                label = target[..., :args.output_dim]
+                temp=[]
+                for k in range(args.K):
+                    # output = model.predict(data, target, teacher_forcing_ratio=0)
+                    output,_ = model.forward(data )
+                    temp.append(output)
+                temp1=torch.cat(temp,dim=1)
+                y_pred.append(temp1)
+                y_true.append(label)
+                x.append(data)
+    # print('data', data.shape , 'output', output.shape, 'temp1',temp1.shape)
+    x=torch.cat(x,dim=0) #shape[3988,12,5,1]
+    y_pred=torch.cat(y_pred,dim=0) #shape[3988,K,5,1]
+    y_true=torch.cat(y_true,dim=0)#shape[3988,1,5,1]
+
+    if args.scaler:
+        y_pred = args.scaler.inverse_transform(y_pred)
+        y_true = args.scaler.inverse_transform(y_true)
+    Y_pred_all = y_pred.squeeze(-1) [args.tinit:]
+    # print("Y_pred_all", Y_pred_all.shape)
+
+    d = num_node = y_true.shape[2]
+
+    T_val = int( len(y_true) * args.val_ratio/ (args.val_ratio + args.test_ratio) )
+    T_test = int ( len(y_true) * args.test_ratio / (args.val_ratio + args.test_ratio) )
+    print('T_val',T_val,'T_test',T_test)
+
+    intervals, volumes, coverage = [], [], []
+    print('test:',  T_test - args.tinit )
+
+    for t in range(args.tinit + T_val, T_val + T_test):
+        predcal, YCal = y_pred[t-args.tinit:t], y_true[t - args.tinit:t]
+        # calibration set y_pred 500，1，5，1 ytrue: 500，1, 5，1
+        eps=predcal-YCal
+        eps_res = eps.view(-1,num_node).T
+        # print(eps_res.shape)
+
+        calibration_scores = torch.abs( torch.Tensor(eps_res) ) # with shape tinit*d
+        # Quantiles for each dimension (1-alpha/d)
+        b = np.ceil((args.tinit + 1) * (1 - alpha / num_node)) / args.tinit
+        b = np.min((b,1))
+        quantiles = torch.quantile(calibration_scores, b, axis=1)
+        # print('calibration_scores', calibration_scores.shape, 'quantiles',quantiles.shape)
+        # print('y_true', y_true.shape)
+
+        y_true_t = y_true[t].squeeze(dim=1).squeeze(dim=-1).view(-1)
+        y_pred_t = y_pred[t].squeeze(dim=1).squeeze(dim=-1).view(-1)
+        # print('y_pred_t',y_pred_t.shape, 'y_true_t', y_true_t.shape)
+
+        # Build prediction intervals for each dimension
+        interval_t = []
+        volume_t = 1
+        in_interval = True
+
+        for dim in range(d):
+            lower_bound = y_pred_t[dim] - quantiles[dim]
+            upper_bound = y_pred_t[dim] + quantiles[dim]
+            interval_t.append((lower_bound, upper_bound))
+
+            # Update volume
+            volume_t *= (upper_bound - lower_bound)
+
+            # Check if true value falls within the interval
+            if not (lower_bound <= y_true_t[dim] <= upper_bound):
+                in_interval = False
+        volume_t1 = volume_t ** (1 / d)
+        intervals.append(interval_t)
+        volumes.append(volume_t1)
+        coverage.append(in_interval)
+    
+    # Move tensors to CPU before converting to NumPy
+    if torch.is_tensor(coverage[0]):
+        coverage = [item.cpu().detach().numpy() if torch.is_tensor(item) else item for item in coverage]
+    if torch.is_tensor(volumes[0]):
+        volumes = [item.cpu().detach().numpy() if torch.is_tensor(item) else item for item in volumes]
+    
+    picp, ineff = np.mean(coverage), np.mean(volumes)
+    eff_var = np.var(volumes)
+
+    return Y_pred_all, picp, ineff, eff_var
+
 def PCP_ellip(model, data_loader, alpha, args):
 
     y_true=[]
@@ -500,7 +595,7 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
                 temp=[]
                 for k in range(args.K):
                     # output = model.predict(data, target, teacher_forcing_ratio=0)
-                    output,_ = model.forward(data )
+                    output,_ = model.forward(data)
                     temp.append(output)
                 temp1=torch.cat(temp,dim=1)
                 y_pred.append(temp1)
@@ -526,7 +621,6 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
     alphatlist=[]
     adaptErrSeq =torch.zeros((T_test - args.tinit))
     alphat = alpha
-    eff=0
     eff_l = []
     print('test:',  T_test - args.tinit )
 
@@ -540,7 +634,7 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
         eps=predcal-YCal
         # print(predcal.shape, 'YCal', YCal.shape,'eps',eps.shape)
 
-        eps_res = eps.view(-1,num_node).T
+        eps_res = eps.view(-1, num_node).T
         # print('eps_res: ', eps_res.shape, 'y_true',y_true.shape)
         mean = torch.mean(eps_res, dim=1, keepdim=True)  # 均值形状为 (1, 5)
 
@@ -610,7 +704,7 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
         # print('estimated_beta', estimated_beta, 'estimated_phi',estimated_phi)
         # print('cov_sample', cov_sample, 'cov_spatial', cov_spatial)
         if args.Cov_type == 'ellip':
-            cov_spatial = torch.Tensor( cov_spatial)
+            cov_spatial = torch.Tensor(cov_spatial)
             cov_sample_inv = torch.linalg.pinv(cov_sample.to(args.device))
             cov_spatial_inv = torch.linalg.pinv(torch.Tensor(cov_spatial).to(args.device))
             cov_inv = (1 - args.lmbd) * cov_sample_inv + args.lmbd * cov_spatial_inv
@@ -621,19 +715,32 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
 
         eps_centered = eps_centered.T
         # print('eps_centered',eps_centered.shape,'cov_inv',cov_inv.shape)
+        
         # Compute nonconformity scores for the calibration set
-        distances = torch.sqrt(torch.sum(eps_centered @ cov_inv * eps_centered, dim=1)).view(args.tinit, args.K) #.view(args.tinit+T_val, args.K)   # Shape: (K,)
-        #print(distances.shape)
+        # FIX: Calculate the actual shape based on tensor dimensions
+        distances_raw = torch.sqrt(torch.sum(eps_centered @ cov_inv * eps_centered, dim=1))
+        
+        # Safely reshape based on actual dimensions and K
+        total_elements = distances_raw.numel()
+        if total_elements % args.K == 0:
+            # If divisible by K, reshape to (-1, K)
+            distances = distances_raw.reshape(-1, args.K)
+        else:
+            # Handle the case where the size isn't evenly divisible
+            print(f"Warning: tensor size {total_elements} not divisible by K={args.K}. Using first {(total_elements // args.K) * args.K} elements.")
+            # Trim to nearest multiple of K and reshape
+            trimmed_size = (total_elements // args.K) * args.K
+            distances = distances_raw[:trimmed_size].reshape(-1, args.K)
 
-        nonconformity_scores,_ = torch.min(distances,dim=1)
+        nonconformity_scores, _ = torch.min(distances, dim=1)
         non_nan_values = nonconformity_scores[~torch.isnan(nonconformity_scores)]
         max_value = torch.max(non_nan_values) if len(non_nan_values) > 0 else torch.tensor(0.0)
         nonconformity_scores = torch.where(torch.isnan(nonconformity_scores), max_value, nonconformity_scores)
 
         # nonconformity_scores = torch.tensor(nonconformity_scores)
         alphat = np.clip(alphat, 0, 1)
-        a = torch.tensor(1 - alphat, device = nonconformity_scores.device )
-        b = torch.ceil((args.tinit + 1) * a) / args.tinit
+        a = torch.tensor(1 - alphat, device = nonconformity_scores.device)
+        b = torch.ceil((nonconformity_scores.shape[0] + 1) * a) / nonconformity_scores.shape[0]  # Use actual shape instead of args.tinit
         b = torch.clip(b, 0, 1).to(nonconformity_scores.dtype)
         # print("the shape of b is {}".format(b.shape))
         q_alpha = torch.quantile(nonconformity_scores, b, interpolation='higher')
@@ -665,7 +772,7 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
         if args.Cov_type == 'ellip':
             cur_eff = (args.K * ellipsoid_volume(cov_np, q_np)) ** (1 / args.num_nodes)
         else:  # elif: args.Cov_type == 'sphere':
-            cur_eff = (args.K * sphere_volume(args.num_nodes, q_alpha)) #** (1 / args.num_nodes)
+            cur_eff = (args.K * sphere_volume(args.num_nodes, q_alpha.cpu().item())) #** (1 / args.num_nodes)
 
         # if t % 1000 == 0:
         # # if torch.isnan(q_alpha).any():
@@ -688,8 +795,12 @@ def PCP_ellip_nonlinear(model, data_loader,alpha,args):
 
 
     picp = 1 - torch.sum(adaptErrSeq) / len(adaptErrSeq)
-    eff = np.nanmean(eff_l)
-    eff_var = np.var(eff_l)
+    
+    # Move CUDA tensors to CPU before converting to NumPy
+    cpu_eff_l = [item.cpu().detach().numpy() if isinstance(item, torch.Tensor) else item for item in eff_l]
+    eff = np.nanmean(cpu_eff_l)
+    eff_var = np.var(cpu_eff_l)
+    
     print(f"average of picp is {picp} and inefficiency is {eff}")
-    print('Num of nan', np.sum(np.isnan(eff_l))  )
+    print('Num of nan', np.sum(np.isnan(cpu_eff_l))  )
     return Y_pred_all, picp, eff, eff_var

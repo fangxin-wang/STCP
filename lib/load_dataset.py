@@ -3,9 +3,13 @@ import numpy as np
 import re
 
 def parse_d_from_str(s: str) -> int:
+    # Check for "top_N" format
     match = re.match(r"PEMS03_top_(\d+)", s)
     if match:
         return int(match.group(1))
+    # Check for "w12" format
+    elif "PEMS03_w12" in s:
+        return "w12"
     else:
         return False
 
@@ -23,8 +27,18 @@ def load_st_dataset(dataset, seed = 1):
     elif dataset == 'PEMS07':
         data_path = os.path.join('./data/PEMS07/PEMS07.npz')
         data = np.load(data_path)['data'][:, :, 0]  #only the first dimension, traffic flow data
+    elif dataset == 'PEMS03_w12':
+        # Load the w12 dataset
+        data_path = './data/PEMS03/PEMS03_w12.txt'
+        data = np.loadtxt(data_path)
+        print(data.shape)
     elif parse_d_from_str(dataset):
-        data_path = './data/PEMS03/PEMS03_top_{}.txt'.format(parse_d_from_str(dataset))
+        if parse_d_from_str(dataset) == "w12":
+            # Load the w12 dataset
+            data_path = './data/PEMS03/PEMS03_w12.txt'
+        else:
+            # Load the top_N dataset
+            data_path = './data/PEMS03/PEMS03_top_{}.txt'.format(parse_d_from_str(dataset))
         data = np.loadtxt(data_path)
         print(data.shape)
     elif dataset == 'PEMSBAY':

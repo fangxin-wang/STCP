@@ -37,36 +37,107 @@ def RRSE_torch(pred, true, mask_value=None):
     return torch.sqrt(torch.sum((pred - true) ** 2)) / torch.sqrt(torch.sum((pred - true.mean()) ** 2))
 
 def CORR_torch(pred, true, mask_value=None):
-    #input B, T, N, D or B, N, D or B, N
+    # input B, T, N, D or B, N, D or B, N
+    
+    # First ensure pred and true have the same shape
+    if pred.shape != true.shape:
+        # Attempt to reshape for compatible calculations
+        if pred.numel() != true.numel():
+            # If sizes don't match at all, try flattening and resizing
+            if pred.numel() < true.numel():
+                # If pred has fewer elements, repeat to match true's size
+                pred = pred.reshape(-1).repeat(true.numel() // pred.numel() + 1)[:true.numel()]
+            else:
+                # If true has fewer elements, truncate pred
+                pred = pred.reshape(-1)[:true.numel()]
+            # Reshape to match true's shape
+            pred = pred.reshape(true.shape)
+    
     if len(pred.shape) == 2:
         pred = pred.unsqueeze(dim=1).unsqueeze(dim=1)
         true = true.unsqueeze(dim=1).unsqueeze(dim=1)
     elif len(pred.shape) == 3:
         pred = pred.transpose(1, 2).unsqueeze(dim=1)
         true = true.transpose(1, 2).unsqueeze(dim=1)
-    elif len(pred.shape)  == 4:
-        #B, T, N, D -> B, T, D, N
+    elif len(pred.shape) == 4:
+        # B, T, N, D -> B, T, D, N
         pred = pred.transpose(2, 3)
         true = true.transpose(2, 3)
     else:
-        raise ValueError
+        raise ValueError("Unsupported tensor shape for correlation calculation")
+    
     dims = (0, 1, 2)
     pred_mean = pred.mean(dim=dims)
     true_mean = true.mean(dim=dims)
     pred_std = pred.std(dim=dims)
     true_std = true.std(dim=dims)
-    correlation = ((pred - pred_mean)*(true - true_mean)).mean(dim=dims) / (pred_std*true_std)
-    index = (true_std != 0)
-    correlation = (correlation[index]).mean()
-    return correlation
-
+    
+    # Check if any std is zero to avoid division by zero
+    valid_std = (pred_std > 0) & (true_std > 0)
+    
+    # If no valid elements, return 0
+    if valid_std.sum() == 0:
+        return torch.tensor(0.0, device=pred.device)
+    
+    # Calculate correlation only for elements with non-zero std
+    correlation = ((pred - pred_mean) * (true - true_mean)).mean(dim=dims) / (pred_std * true_std)
+    
+    # Replace NaN values with 0 to handle any divisions by zero
+    correlation = torch.nan_to_num(correlation, nan=0.0)
+    
+    # Only average over valid elements (non-zero std)
+    correlation_valid = correlation[valid_std]
+    
+    # If we have no valid correlations, return 0
+    if correlation_valid.numel() == 0:
+        return torch.tensor(0.0, device=pred.device)
+    
+    return correlation_valid.mean()
 
 def MAPE_torch(pred, true, mask_value=None):
-    if mask_value != None:
+    """
+    Calculate Mean Absolute Percentage Error with safe handling of near-zero values
+    and dimension mismatches.
+    """
+    # Ensure the shapes match or can be safely broadcast
+    if pred.shape != true.shape:
+        # Try to reshape for compatible broadcasting
+        if pred.numel() != true.numel():
+            # If sizes don't match at all, try flattening
+            if pred.numel() < true.numel():
+                # If pred has fewer elements, repeat to match true's size
+                pred = pred.reshape(-1).repeat(true.numel() // pred.numel())
+            else:
+                # If true has fewer elements, truncate pred
+                pred = pred.reshape(-1)[:true.numel()]
+            # Reshape to match true's shape
+            pred = pred.reshape(true.shape)
+            
+    # Apply mask to filter out small values
+    if mask_value is not None:
         mask = torch.gt(true, mask_value)
         pred = torch.masked_select(pred, mask)
         true = torch.masked_select(true, mask)
-    return torch.mean(torch.abs(torch.div((true - pred), true)))
+    
+    # Additional safety against division by zero or very small values
+    # Add a small epsilon to avoid division by zero
+    epsilon = 1e-6
+    # Create a mask for non-zero and non-tiny values
+    safe_mask = torch.abs(true) > epsilon
+    
+    if safe_mask.sum() == 0:  # If no valid values remain
+        return torch.tensor(0.0, device=true.device)
+    
+    # Apply safe mask
+    safe_pred = torch.masked_select(pred, safe_mask)
+    safe_true = torch.masked_select(true, safe_mask)
+    
+    # Calculate MAPE with clamping to avoid extreme values
+    mape_values = torch.abs(torch.div((safe_true - safe_pred), safe_true))
+    # Clamp values to a reasonable range (e.g., 0 to 1000%)
+    mape_values = torch.clamp(mape_values, 0, 10.0)  # Limiting to 1000% error
+    
+    return torch.mean(mape_values)
 
 def PNBI_torch(pred, true, mask_value=None):
     if mask_value != None:

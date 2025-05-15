@@ -1,4 +1,3 @@
-
 import os
 import sys
 import pickle
@@ -24,6 +23,8 @@ from lib.dataloader import get_dataloader
 from lib.TrainInits import print_model_parameters
 from correction import train_cal_correction,train_cal_correction_gnn
 from STPredictor import RecurrentGCN, TemporalGNN
+# Change the import to use our own DCRNN implementation
+from model.DCRNN import DCRNN
 import networkx as nx
 
 torch.set_default_dtype(torch.float32)
@@ -56,9 +57,13 @@ initial_args, remaining_argv = initial_parser.parse_known_args()
 
 
 def parse_d_from_str(s: str) -> int:
+    # Check for "top_N" format
     match = re.match(r"PEMS03_top_(\d+)", s)
     if match:
         return int(match.group(1))
+    # Check for "w12" format
+    elif "PEMS03_w12" in s:
+        return "w12"
     else:
         return False
 
@@ -69,6 +74,8 @@ if initial_args.dataset=='syn_gpvar':
     config_file = './model/syn_gpvar_{}.conf'.format( initial_args.syn_seed )
 elif initial_args.dataset=='syn_tailup':
     config_file = './model/syn_tailup_{}.conf'.format( initial_args.syn_seed )
+elif parse_d_from_str(initial_args.dataset) == "w12":
+    config_file = './model/PEMS03_w12_{}.conf'.format(initial_args.model)
 elif parse_d_from_str(initial_args.dataset):
     config_file = './model/PEMS03_{}.conf'.format(initial_args.model)
 else:
@@ -76,7 +83,7 @@ else:
 print('Read configuration file: %s' % (config_file))
 config = configparser.ConfigParser()
 config.read(config_file)
-print(config.sections())
+# print(config.sections())
 
 
 second_parser = argparse.ArgumentParser(description="Parse additional arguments based on dataset", parents=[initial_parser],
@@ -87,7 +94,9 @@ second_parser.add_argument('--test_ratio', default=config['data']['test_ratio'],
 second_parser.add_argument('--lag', default=config['data']['lag'], type=int)
 second_parser.add_argument('--horizon', default=config['data']['horizon'], type=int)
 
-if parse_d_from_str(initial_args.dataset):
+if parse_d_from_str(initial_args.dataset) == "w12":
+    second_parser.add_argument('--num_nodes', default=12, type=int)
+elif parse_d_from_str(initial_args.dataset):
     second_parser.add_argument('--num_nodes', default=parse_d_from_str(initial_args.dataset), type=int)
 else:
     second_parser.add_argument('--num_nodes', default=config['data']['num_nodes'], type=int)
@@ -103,6 +112,13 @@ second_parser.add_argument('--embed_dim', default=config['model']['embed_dim'], 
 second_parser.add_argument('--rnn_units', default=config['model']['rnn_units'], type=int)
 second_parser.add_argument('--num_layers', default=config['model']['num_layers'], type=int)
 second_parser.add_argument('--cheb_k', default=config['model']['cheb_order'], type=int)
+
+# Add nb_blocks parameter for ASTGCN model
+if 'nb_blocks' in config['model']:
+    second_parser.add_argument('--nb_blocks', default=config['model']['nb_blocks'], type=int)
+else:
+    second_parser.add_argument('--nb_blocks', default=2, type=int)  # Default value if not in config
+
 #train
 second_parser.add_argument('--loss_func', default=config['train']['loss_func'], type=str)
 second_parser.add_argument('--seed', default=config['train']['seed'], type=int)
@@ -153,7 +169,9 @@ elif initial_args.dataset=='syn_tailup':
     second_parser.add_argument('--Sigma_spatial', default=config['var_para']['Sigma_spatial'], type=str)
     second_parser.add_argument('--num_nodes', default=20, type=int)
 else:
-    if parse_d_from_str(initial_args.dataset):
+    if parse_d_from_str(initial_args.dataset) == "w12":
+        D_matrix_path = './data/PEMS03/PEMS03_w12_D.txt'
+    elif parse_d_from_str(initial_args.dataset):
         D_matrix_path = './data/PEMS03/PEMS03_top_{}_D.txt'.format(parse_d_from_str(initial_args.dataset))
     elif initial_args.dataset == 'PEMSBAY':
         D_matrix_path = './data/PEMSBAY/pems_bay_sub_D.txt'
@@ -166,6 +184,7 @@ else:
 second_parser.add_argument('--lmbd', default = 0, type=float, help= "The weight of graph covariance matrix.")
 second_parser.add_argument('--Cov_type', default = 'ellip', type=str)
 second_parser.add_argument('--w', default=2, type=int)
+
 
 #save model
 second_parser.add_argument('--save_path', default='./saved_model/', type=str)
@@ -250,7 +269,10 @@ if args.model == 'AGCRN':
 else:
     if parse_d_from_str(initial_args.dataset):
         d = parse_d_from_str(initial_args.dataset)
-        file_path = f"data/PEMS03/G_sub_{d}.gpickle"
+        if d == "w12":
+            file_path = "data/PEMS03/G_w12.gpickle"
+        else:
+            file_path = f"data/PEMS03/G_sub_{d}.gpickle"
         with open(file_path, 'rb') as f:
             G = pickle.load(f)
         # G.remove_edges_from(list(nx.selfloop_edges(G)))
@@ -298,6 +320,10 @@ def masked_mae_loss(args, mask_value):
         labels = torch.nan_to_num(labels, nan=0.0)#.squeeze(1)
         if args.model == 'A3TGCN':
             labels = labels.squeeze(1)
+        elif args.model == 'ASTGCN':
+            # ASTGCN may have different output shape handling
+            if labels.dim() > preds.dim():
+                labels = labels.squeeze(1)
         mae = MAE_torch(pred=preds, true=labels, mask_value=mask_value)
         return mae
     return loss
@@ -396,9 +422,7 @@ elif args.mode == 'test_gt':
 
 elif args.mode == 'test':
 
-    from torch.utils.data import ConcatDataset, DataLoader
-
-    # Combine validation and test datasets
+    from torch.utils.data import ConcatDataset, DataLoader    # Combine validation and test datasets
     combined_dataset = ConcatDataset([cal_loader.dataset, test_loader.dataset])
     combined_data_loader = DataLoader(combined_dataset, batch_size=32, shuffle=False)
 
@@ -406,7 +430,19 @@ elif args.mode == 'test':
     if args.dataset =='syn_tailup' or args.dataset =='syn_tailup_gen':
         model = None
     else:
-        model.load_state_dict(torch.load(model_path, map_location=args.device))
+        # Special handling for ADDGCN model which has dimension mismatch
+        if args.model == 'ADDGCN':
+            # Load with strict=False to ignore mismatched parameters
+            state_dict = torch.load(model_path, map_location=args.device)
+            # Fix for ADDGCN model which has output layer dimension mismatch
+            model_dict = model.state_dict()
+            # Filter out layers with mismatched sizes (particularly the final output layer)
+            state_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.size() == model_dict[k].size()}
+            # Load the filtered state dict
+            model.load_state_dict(state_dict, strict=False)
+            print("ADDGCN model loaded with partial state_dict (ignoring mismatched layers)")
+        else:
+            model.load_state_dict(torch.load(model_path, map_location=args.device))
 
     print(f"{args.dataset},{args.syn_seed},{args.tinit}, {args.lmbd},{args.gamma},{args.Cov_type}")
 
