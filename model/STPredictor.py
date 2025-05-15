@@ -2,7 +2,7 @@ import torch
 torch.manual_seed(1)
 import torch.nn.functional as F
 import torch.nn as nn
-from torch_geometric_temporal.nn.recurrent import DCRNN, A3TGCN, A3TGCN2, BatchedDCRNN
+from torch_geometric_temporal.nn.recurrent import DCRNN, BatchedDCRNN
 from torch_geometric_temporal.nn.attention import ASTGCN
 from torch_geometric.nn import ChebConv, GCNConv
 import torchdiffeq
@@ -93,41 +93,6 @@ class DCRNNModel(STPredictor):
         
         # Take the last time step output
         h = output[:, -1:, :, :]
-        
-        return h, None
-
-
-class A3TGCNModel(STPredictor):
-    """
-    Adaptive Attention-based Temporal Graph Convolutional Network model
-    """
-    def _build_model(self):
-        # A3TGCN2 implementation
-        self.tgnn = A3TGCN2(
-            in_channels=self.input_dim, 
-            out_channels=self.hidden_dim, 
-            periods=self.horizon, 
-            batch_size=self.batch_size
-        )
-        
-        # Output projection
-        self.linear = torch.nn.Linear(self.hidden_dim, self.horizon)
-
-    def forward(self, X):
-        # A3TGCN expects input shape: [batch_size, num_nodes, features, seq_length]
-        input_transformed = X.permute(0, 2, 3, 1)
-        
-        # Ensure all inputs are on the same device
-        device = X.device
-        edge_index = self.edge_index.to(device)
-        edge_weight = self.edge_weight.to(device)
-        
-        # Process through A3TGCN
-        h = self.tgnn(input_transformed, edge_index, edge_weight)
-        
-        # Apply non-linearity and projection
-        h = F.relu(h)
-        h = self.linear(h)
         
         return h, None
 
@@ -453,206 +418,6 @@ class ODEFunc(nn.Module):
         return dx
 
 
-class ADDGCNModel(STPredictor):
-    """
-    Direction-Adjustable Adaptive Graph Convolutional Network model.
-    
-    This model adaptively learns the importance of different directions in the graph
-    and adjusts the message passing accordingly. It combines spatial and temporal
-    information with direction-specific convolution.
-    
-    References:
-    - Paper: Direction-Adjustable Adaptive Graph Convolutional Network for Traffic Forecasting
-    """
-    def _build_model(self):
-        # Model hyperparameters
-        self.input_dim = self.args.input_dim
-        self.output_dim = self.args.output_dim
-        self.hidden_dim = self.args.rnn_units
-        self.num_nodes = self.args.num_nodes
-        self.num_timesteps_input = self.args.lag
-        self.num_timesteps_output = self.horizon
-        self.dropout_rate = 0.3
-        
-        # Learnable direction parameters
-        self.direction_weights = nn.Parameter(
-            torch.ones(3, requires_grad=True)  # Incoming, outgoing, self-loop
-        )
-        
-        # Spatial embedding for nodes
-        self.node_embeddings = nn.Parameter(
-            torch.randn(self.num_nodes, self.hidden_dim), requires_grad=True
-        )
-        
-        # Temporal convolution layers
-        self.temporal_conv_in = nn.Conv2d(
-            in_channels=self.input_dim,
-            out_channels=self.hidden_dim,
-            kernel_size=(1, 3),
-            padding=(0, 1)
-        )
-        
-        # Define multiple adaptive graph convolution blocks
-        self.adaptive_gcn_blocks = nn.ModuleList([
-            AdaptiveGCNBlock(
-                in_channels=self.hidden_dim,
-                out_channels=self.hidden_dim,
-                num_nodes=self.num_nodes
-            ) for _ in range(2)  # Stack 2 blocks
-        ])
-        
-        # Fully connected layers for output prediction
-        self.fc_out = nn.Sequential(
-            nn.Linear(self.hidden_dim * self.num_timesteps_input, self.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(self.dropout_rate),
-            nn.Linear(self.hidden_dim, self.num_timesteps_output * self.output_dim)
-        )
-
-    def compute_direction_graph(self, edge_index, edge_weight):
-        """
-        Computes the direction-adjusted graph matrices
-        
-        Args:
-            edge_index: Edge indices of shape [2, num_edges]
-            edge_weight: Edge weights of shape [num_edges]
-            
-        Returns:
-            Tuple of (in_matrix, out_matrix, self_matrix) representing
-            incoming, outgoing, and self-loop connections
-        """
-        device = edge_index.device
-        num_nodes = self.num_nodes
-        
-        # Create sparse adjacency matrix
-        adj = torch.zeros(num_nodes, num_nodes, device=device)
-        for i in range(edge_index.shape[1]):
-            src, dst = edge_index[0, i], edge_index[1, i]
-            weight = edge_weight[i]
-            adj[src, dst] = weight
-        
-        # Normalize matrices
-        in_degree = adj.sum(dim=0) + 1e-10  # Add small value to avoid division by zero
-        out_degree = adj.sum(dim=1) + 1e-10
-        
-        # Create direction-specific matrices
-        in_matrix = adj.clone()
-        for i in range(num_nodes):
-            if in_degree[i] > 0:
-                in_matrix[:, i] = in_matrix[:, i] / in_degree[i]
-                
-        out_matrix = adj.clone()
-        for i in range(num_nodes):
-            if out_degree[i] > 0:
-                out_matrix[i, :] = out_matrix[i, :] / out_degree[i]
-                
-        # Self-loop matrix (identity)
-        self_matrix = torch.eye(num_nodes, device=device)
-        
-        return in_matrix, out_matrix, self_matrix
-
-    def forward(self, X):
-        # X shape: [batch_size, seq_length, num_nodes, features]
-        batch_size, seq_length, num_nodes, features = X.shape
-        device = X.device
-        
-        # Ensure edge data is on the correct device
-        edge_index = self.edge_index.to(device)
-        edge_weight = self.edge_weight.to(device)
-        
-        # Compute direction-specific matrices
-        in_matrix, out_matrix, self_matrix = self.compute_direction_graph(edge_index, edge_weight)
-        
-        # Apply direction weights and combine matrices
-        direction_weights_softmax = F.softmax(self.direction_weights, dim=0)
-        combined_matrix = (direction_weights_softmax[0] * in_matrix + 
-                           direction_weights_softmax[1] * out_matrix + 
-                           direction_weights_softmax[2] * self_matrix)
-        
-        # Reshape input for temporal convolution
-        # [batch_size, features, num_nodes, seq_length]
-        x = X.permute(0, 3, 2, 1)
-        
-        # Apply temporal convolution
-        x = self.temporal_conv_in(x)
-        x = F.relu(x)
-        
-        # Process through adaptive GCN blocks
-        for block in self.adaptive_gcn_blocks:
-            x = block(x, combined_matrix)
-        
-        # Reshape for final prediction
-        # [batch_size, num_nodes, hidden_dim * seq_length]
-        x = x.permute(0, 2, 1, 3).reshape(batch_size, num_nodes, -1)
-        
-        # Final prediction layer
-        out = self.fc_out(x)
-        
-        # Reshape to [batch_size, horizon, num_nodes, output_dim]
-        out = out.reshape(batch_size, num_nodes, self.num_timesteps_output, self.output_dim)
-        out = out.permute(0, 2, 1, 3)
-        
-        # Select only first time step if needed to match API
-        out = out[:, :1, :, :]
-        
-        return out, None
-
-
-class AdaptiveGCNBlock(nn.Module):
-    """
-    Adaptive Graph Convolution Block with direction-adjustable features
-    """
-    def __init__(self, in_channels, out_channels, num_nodes):
-        super(AdaptiveGCNBlock, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.num_nodes = num_nodes
-        
-        # GCN weight matrices
-        self.weights = nn.Parameter(
-            torch.Tensor(in_channels, out_channels),
-            requires_grad=True
-        )
-        self.biases = nn.Parameter(
-            torch.Tensor(out_channels),
-            requires_grad=True
-        )
-        
-        # Attention mechanism for adaptive learning
-        self.attention = nn.Sequential(
-            nn.Linear(in_channels * 2, out_channels),
-            nn.ReLU(),
-            nn.Linear(out_channels, 1)
-        )
-        
-        self.reset_parameters()
-        
-    def reset_parameters(self):
-        nn.init.xavier_uniform_(self.weights)
-        nn.init.zeros_(self.biases)
-    
-    def forward(self, x, adj):
-        """
-        Args:
-            x: Input features [batch_size, channels, num_nodes, time_steps]
-            adj: Adjacency matrix [num_nodes, num_nodes]
-        """
-        # Get dimensions
-        batch_size, channels, num_nodes, time_steps = x.shape
-        
-        # Linear transformation
-        x_transformed = torch.einsum('bcnt,ci->bint', x, self.weights)
-        
-        # Apply graph convolution: X' = AXW
-        x_conv = torch.einsum('bint,nm->bimt', x_transformed, adj)
-        
-        # Add bias and apply nonlinearity
-        x_conv = x_conv + self.biases.view(1, self.out_channels, 1, 1)
-        x_conv = F.relu(x_conv)
-        
-        return x_conv
-
-
 class MSTGCNModel(STPredictor):
     """
     Multi-Component Spatial-Temporal Graph Convolutional Network model
@@ -895,23 +660,15 @@ def create_model(args):
     """
     model_types = {
         'DCRNN': DCRNNModel,
-        'A3TGCN': A3TGCNModel,
         'ASTGCN': ASTGCNModel,
         'STGCN': STGCNModel,
         'STGODE': STGODEModel,
-        'ADDGCN': ADDGCNModel,
-        'MSTGCN': MSTGCNModel,  # Add MSTGCN to model types
+        'MSTGCN': MSTGCNModel,
     }
     
     # Get the model class based on the specified type
-    if args.model in model_types:
-        ModelClass = model_types[args.model]
-        return ModelClass(args)
-    else:
-        # Default to A3TGCN if model type not found
-        print(f"Warning: Model type '{args.model}' not found. Using A3TGCN as default.")
-        return A3TGCNModel(args)
-
+    ModelClass = model_types[args.model]
+    return ModelClass(args)
 
 # For backward compatibility with existing code
 class RecurrentGCN(DCRNNModel):
@@ -926,21 +683,14 @@ class TemporalGNN(STPredictor):
     
     def _build_model(self):
         # Determine the model type and build it
-        if self.model_type == 'A3TGCN':
-            self._model = A3TGCNModel(self.args)
-        elif self.model_type == 'ASTGCN':
+        if  self.model_type == 'ASTGCN':
             self._model = ASTGCNModel(self.args)
         elif self.model_type == 'STGCN':
             self._model = STGCNModel(self.args)
         elif self.model_type == 'STGODE':
             self._model = STGODEModel(self.args)
-        elif self.model_type == 'ADDGCN':
-            self._model = ADDGCNModel(self.args)
         elif self.model_type == 'MSTGCN':
             self._model = MSTGCNModel(self.args)
-        else:
-            # Default to A3TGCN for backward compatibility
-            self._model = A3TGCNModel(self.args)
     
     def forward(self, X):
         return self._model.forward(X)

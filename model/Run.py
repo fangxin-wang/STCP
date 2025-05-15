@@ -318,9 +318,7 @@ def masked_mae_loss(args, mask_value):
         #     labels = scaler.inverse_transform(labels)
         preds = torch.nan_to_num(preds, nan=0.0)
         labels = torch.nan_to_num(labels, nan=0.0)#.squeeze(1)
-        if args.model == 'A3TGCN':
-            labels = labels.squeeze(1)
-        elif args.model == 'ASTGCN':
+        if args.model == 'ASTGCN':
             # ASTGCN may have different output shape handling
             if labels.dim() > preds.dim():
                 labels = labels.squeeze(1)
@@ -430,19 +428,7 @@ elif args.mode == 'test':
     if args.dataset =='syn_tailup' or args.dataset =='syn_tailup_gen':
         model = None
     else:
-        # Special handling for ADDGCN model which has dimension mismatch
-        if args.model == 'ADDGCN':
-            # Load with strict=False to ignore mismatched parameters
-            state_dict = torch.load(model_path, map_location=args.device)
-            # Fix for ADDGCN model which has output layer dimension mismatch
-            model_dict = model.state_dict()
-            # Filter out layers with mismatched sizes (particularly the final output layer)
-            state_dict = {k: v for k, v in state_dict.items() if k in model_dict and v.size() == model_dict[k].size()}
-            # Load the filtered state dict
-            model.load_state_dict(state_dict, strict=False)
-            print("ADDGCN model loaded with partial state_dict (ignoring mismatched layers)")
-        else:
-            model.load_state_dict(torch.load(model_path, map_location=args.device))
+        model.load_state_dict(torch.load(model_path, map_location=args.device))
 
     print(f"{args.dataset},{args.syn_seed},{args.tinit}, {args.lmbd},{args.gamma},{args.Cov_type}")
 

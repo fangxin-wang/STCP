@@ -12,8 +12,8 @@ import torch.nn.functional as F
 
 from sklearn.linear_model import LinearRegression
 from scipy.optimize import minimize, least_squares
-# from data.data_utils.gen_syn_graph_tailup import opt_objective, build_spatial_covariance
-from data.data_utils.gen_syn_tailup import sort_edges_by_preceding_order
+# from data.gen_syn_graph_tailup import opt_objective, build_spatial_covariance
+
 
 def read_G(syn_seed):
     path = "./data/syn_data/G_seed_{}.gpickle".format(syn_seed)
@@ -159,7 +159,6 @@ def sphere_volume(d, r):
 #
 #     print(f"average of picp is {picp} and inefficiency is {eff}")
 #     return picp,eff
-
 def compare_gt_error(C_empirical, args):
     path_gt_cov = './data/syn_data/gt_cov_{}.npz'.format(args.syn_seed)
     A = read_npz(path_gt_cov)
@@ -228,6 +227,7 @@ def get_cov_spatial(x, t, tinit, YCal, args):
         weights_dict = nx.get_edge_attributes(G, "weight")
         num_sampled_obs_per_edge = args.num_sampled_obs_per_edge
 
+        from data.gen_syn_tailup import sort_edges_by_preceding_order
         sorted_edges = sort_edges_by_preceding_order(G)
         weights = []
         for edge in sorted_edges:
@@ -283,6 +283,8 @@ def cp_square( model, data_loader, alpha, args ):
         # Calibration dataset: recent points in the range [t-tinit, t)
         YCal = y_true[t - args.tinit:t]  # ytrue: 500，5，1
         alpha_estimates, residuals, _ = get_cov_spatial(X, t, args.tinit, YCal, args)
+        # calibration_Y = Y[t - tinit:t]
+        # calibration_predictions = Ypred[t - tinit:t]
 
         # Compute residuals (scores) for each dimension
         calibration_scores = torch.abs( torch.Tensor(residuals) ) # with shape tinit*d
@@ -307,6 +309,7 @@ def cp_square( model, data_loader, alpha, args ):
             y_true_t = Y[t].squeeze(-1)
             y_pred_t = torch.zeros_like(y_true_t)
             # eps_t = y_true[t].squeeze(-1)
+
 
         # Build prediction intervals for each dimension
         interval_t = []
@@ -334,7 +337,6 @@ def cp_square( model, data_loader, alpha, args ):
     if args.w > 0:
         Y_pred_all = torch.stack(Y_pred_all)
     return Y_pred_all, picp, ineff, eff_var #, picp, ineff
-
 
 def square_nonlinear(model, data_loader, alpha, args):
     """
@@ -386,7 +388,7 @@ def square_nonlinear(model, data_loader, alpha, args):
         # calibration set y_pred 500，1，5，1 ytrue: 500，1, 5，1
         eps=predcal-YCal
         eps_res = eps.view(-1,num_node).T
-        print(eps_res.shape)
+        # print(eps_res.shape)
 
         calibration_scores = torch.abs( torch.Tensor(eps_res) ) # with shape tinit*d
         # Quantiles for each dimension (1-alpha/d)
@@ -420,12 +422,17 @@ def square_nonlinear(model, data_loader, alpha, args):
         intervals.append(interval_t)
         volumes.append(volume_t1)
         coverage.append(in_interval)
+    
+    # Move tensors to CPU before converting to NumPy
+    if torch.is_tensor(coverage[0]):
+        coverage = [item.cpu().detach().numpy() if torch.is_tensor(item) else item for item in coverage]
+    if torch.is_tensor(volumes[0]):
+        volumes = [item.cpu().detach().numpy() if torch.is_tensor(item) else item for item in volumes]
+    
     picp, ineff = np.mean(coverage), np.mean(volumes)
     eff_var = np.var(volumes)
 
     return Y_pred_all, picp, ineff, eff_var
-
-
 
 def PCP_ellip(model, data_loader, alpha, args):
 
@@ -569,7 +576,7 @@ def read_npz(path):
     data = loaded_data['array']
     return data
 
-def PCP_ellip_nonlinear(model, data_loader, alpha, args):
+def PCP_ellip_nonlinear(model, data_loader,alpha,args):
     """
     Use ANY prediction model instead of linear regressor.
     :param model: Prediction Model.
@@ -622,22 +629,21 @@ def PCP_ellip_nonlinear(model, data_loader, alpha, args):
             y_true = y_true.squeeze(1)
 
         predcal, YCal = y_pred[t-args.tinit:t], y_true[t - args.tinit:t]  # calibration set y_pred 500，k，5，1 ytrue: 500，5，1
+        # predcal, YCal = y_pred[:t], y_true[ :t]
 
         eps=predcal-YCal
-        eps_res = eps.view(-1,num_node).T
-<<<<<<< HEAD
+        # print(predcal.shape, 'YCal', YCal.shape,'eps',eps.shape)
+
+        eps_res = eps.view(-1, num_node).T
         # print('eps_res: ', eps_res.shape, 'y_true',y_true.shape)
-        mean = torch.mean(eps_res, dim=1, keepdim=True)  # mean shape (1, 5)
+        mean = torch.mean(eps_res, dim=1, keepdim=True)  # 均值形状为 (1, 5)
 
         eps_centered= (eps_res-mean).to(args.device)#500*K，5
         # print('eps_centered', eps_centered.shape)
 
 
-=======
-        mean = torch.mean(eps_res, dim=1, keepdim=True)  #  (1, 5)
-        eps_centered= (eps_res-mean).to(args.device) # 500*K，5
->>>>>>> origin/main
         dataset = args.dataset
+
         ### ###
         # if t == args.tinit + T_val :
         cov_sample = (eps_centered @ eps_centered.T) / (eps_centered.shape[0] - 1)
