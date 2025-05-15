@@ -26,6 +26,7 @@ do
       # python3 -W ignore model/Run.py --model $MODEL --dataset $DATASET --syn_seed $SEED --mode 'train'
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     #   # Test with different parameters
       for TINIT in 100 200 300 400 500 
       do
@@ -38,6 +39,10 @@ do
             echo $OUTPUT >> $OUTPUT_FILE
           done
         done
+=======
+##      # Train: Keep using
+#      python3 -W ignore model/Run.py --model $MODEL --dataset $DATASET --syn_seed $SEED --mode 'train'
+>>>>>>> origin/main
 =======
 ##      # Train: Keep using
 #      python3 -W ignore model/Run.py --model $MODEL --dataset $DATASET --syn_seed $SEED --mode 'train'
@@ -57,6 +62,7 @@ do
         done
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         # Test with square covariance
         for COV in "square"
         do
@@ -71,6 +77,8 @@ do
   done
 done
 =======
+=======
+>>>>>>> origin/main
       for TINIT  in 500 # 100 200 300 400 500
       do
 
