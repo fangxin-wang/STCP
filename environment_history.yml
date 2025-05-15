@@ -1,7 +1,0 @@
-name: stcp
-channels:
-  - conda-forge
-  - defaults
-dependencies:
-  - python=3.9
-prefix: /home/axel/anaconda3/envs/stcp
