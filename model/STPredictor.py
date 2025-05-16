@@ -11,7 +11,6 @@ import torchdiffeq
 class STPredictor(torch.nn.Module):
     """
     Base class for Spatial-Temporal Graph Neural Network models.
-    This class provides a unified interface for different ST-GNN models.
     """
     def __init__(self, args):
         super(STPredictor, self).__init__()
@@ -31,17 +30,10 @@ class STPredictor(torch.nn.Module):
         self._build_model()
         
     def _build_model(self):
-        """
-        Build the specific model architecture.
-        This method should be implemented by all subclasses.
-        """
         raise NotImplementedError("Subclasses must implement _build_model method")
     
     def forward(self, X):
         """
-        Forward pass of the model.
-        This method should be implemented by all subclasses.
-        
         Args:
             X: Input tensor with shape [batch_size, seq_length, num_nodes, features]
             
@@ -240,10 +232,6 @@ class STGCNModel(STPredictor):
 class STGODEModel(STPredictor):
     """
     Spatial-Temporal Graph Ordinary Differential Equation model
-    
-    References:
-    - Paper: Spatiotemporal Neural ODE Networks for Traffic Flow Forecasting
-    - Link: https://ojs.aaai.org/index.php/AAAI/article/view/20291
     """
     def _build_model(self):
         # Configure STGODE specific parameters
@@ -351,12 +339,6 @@ class STGODEModel(STPredictor):
 
 
 class ODEFunc(nn.Module):
-    """
-    Neural ODE function for STGODE
-    
-    This class defines the ODE dynamics for evolving node states over time.
-    The dynamics incorporate both graph structure and nonlinear transformations.
-    """
     def __init__(self, hidden_dim, edge_index, edge_weight, num_nodes):
         super(ODEFunc, self).__init__()
         self.hidden_dim = hidden_dim
@@ -421,10 +403,6 @@ class ODEFunc(nn.Module):
 class MSTGCNModel(STPredictor):
     """
     Multi-Component Spatial-Temporal Graph Convolutional Network model
-    
-    MSTGCN processes spatial and temporal components with multiple parallel GCN blocks.
-    It captures the spatial dependencies through graph convolution while modeling temporal
-    patterns with 1D convolutions.
     """
     def _build_model(self):
         # Model hyperparameters
